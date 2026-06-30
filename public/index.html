@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mi IA</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace" aria-label="Mi IA">
+        <aside class="panel">
+          <div>
+            <p class="eyebrow">Mi IA</p>
+            <h1>Escribe, crea y responde</h1>
+          </div>
+
+          <div class="mode-group" aria-label="Modo">
+            <button class="mode is-active" data-mode="auto" type="button">Auto</button>
+            <button class="mode" data-mode="text" type="button">Texto</button>
+            <button class="mode" data-mode="image" type="button">Imagen</button>
+          </div>
+
+          <div class="examples">
+            <button type="button" data-example="Escribe una descripcion corta para vender cafe artesanal.">
+              Vender cafe
+            </button>
+            <button type="button" data-example="Crea una imagen de una app futurista para estudiantes.">
+              Crear imagen
+            </button>
+            <button type="button" data-example="Hazme un plan de estudio de 7 dias para aprender JavaScript.">
+              Plan de estudio
+            </button>
+          </div>
+        </aside>
+
+        <section class="conversation" aria-live="polite">
+          <div id="messages" class="messages">
+            <article class="message ai">
+              <div class="avatar">AI</div>
+              <div class="bubble">
+                Hola. Dime que quieres crear: un texto, una idea, una imagen, un resumen o una respuesta para alguien.
+              </div>
+            </article>
+          </div>
+
+          <form id="promptForm" class="composer">
+            <label class="sr-only" for="prompt">Peticion</label>
+            <textarea
+              id="prompt"
+              name="prompt"
+              rows="3"
+              placeholder="Ejemplo: Escribe un anuncio para mi negocio o crea una imagen de..."
+              required
+            ></textarea>
+            <button id="sendButton" type="submit">Enviar</button>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
