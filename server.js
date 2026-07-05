@@ -1,12 +1,14 @@
 const http = require("node:http");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
-const dataDir = path.join(rootDir, "data");
-const generatedDir = path.join(rootDir, "generated");
+const writableRoot = process.env.VERCEL ? path.join(os.tmpdir(), "mi-ia") : rootDir;
+const dataDir = path.join(writableRoot, "data");
+const generatedDir = path.join(writableRoot, "generated");
 const envFile = readEnvFile();
 const env = { ...envFile, ...process.env };
 const port = Number(env.PORT || 3000);

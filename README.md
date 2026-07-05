@@ -38,6 +38,22 @@ Si ya tienes Node.js instalado, tambien puedes ejecutar:
 npm start
 ```
 
+## Como desplegar en Vercel
+
+1. Sube esta carpeta a tu repositorio.
+2. En Vercel, configura estas variables de entorno:
+
+```bash
+OPENAI_API_KEY=tu-clave-real
+OPENAI_TEXT_MODEL=gpt-5.5
+OPENAI_IMAGE_MODEL=gpt-image-2
+OPENAI_VIDEO_MODEL=sora-2
+```
+
+3. Vuelve a desplegar el proyecto.
+
+En Vercel, los archivos creados por la IA se guardan temporalmente durante la vida de la funcion. Para produccion real con descargas persistentes, conviene conectar almacenamiento externo como Vercel Blob, S3 o una base de datos.
+
 ## Configuracion principal
 
 ```bash
