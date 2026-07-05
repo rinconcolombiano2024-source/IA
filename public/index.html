@@ -3,59 +3,95 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Mi IA</title>
+    <title>Mi IA Max</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="shell">
-      <section class="workspace" aria-label="Mi IA">
-        <aside class="panel">
-          <div>
-            <p class="eyebrow">Mi IA</p>
-            <h1>Escribe, crea y responde</h1>
-          </div>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <p class="eyebrow">Mi IA Max</p>
+          <h1>Centro creativo de IA</h1>
+        </div>
 
-          <div class="mode-group" aria-label="Modo">
+        <section class="status" aria-label="Estado del sistema">
+          <div>
+            <span class="dot" id="healthDot"></span>
+            <strong id="healthText">Revisando sistema</strong>
+          </div>
+          <small id="modelText">Modelos pendientes</small>
+        </section>
+
+        <section aria-label="Capacidades">
+          <h2>Modo</h2>
+          <div class="mode-grid">
             <button class="mode is-active" data-mode="auto" type="button">Auto</button>
             <button class="mode" data-mode="text" type="button">Texto</button>
+            <button class="mode" data-mode="document" type="button">Documento</button>
+            <button class="mode" data-mode="restaurant" type="button">Menu</button>
+            <button class="mode" data-mode="book" type="button">Libro</button>
+            <button class="mode" data-mode="code" type="button">Codigo</button>
+            <button class="mode" data-mode="website" type="button">Web</button>
             <button class="mode" data-mode="image" type="button">Imagen</button>
+            <button class="mode" data-mode="video" type="button">Video</button>
+            <button class="mode" data-mode="repair" type="button">Reparar</button>
           </div>
-
-          <div class="examples">
-            <button type="button" data-example="Escribe una descripcion corta para vender cafe artesanal.">
-              Vender cafe
-            </button>
-            <button type="button" data-example="Crea una imagen de una app futurista para estudiantes.">
-              Crear imagen
-            </button>
-            <button type="button" data-example="Hazme un plan de estudio de 7 dias para aprender JavaScript.">
-              Plan de estudio
-            </button>
-          </div>
-        </aside>
-
-        <section class="conversation" aria-live="polite">
-          <div id="messages" class="messages">
-            <article class="message ai">
-              <div class="avatar">AI</div>
-              <div class="bubble">
-                Hola. Dime que quieres crear: un texto, una idea, una imagen, un resumen o una respuesta para alguien.
-              </div>
-            </article>
-          </div>
-
-          <form id="promptForm" class="composer">
-            <label class="sr-only" for="prompt">Peticion</label>
-            <textarea
-              id="prompt"
-              name="prompt"
-              rows="3"
-              placeholder="Ejemplo: Escribe un anuncio para mi negocio o crea una imagen de..."
-              required
-            ></textarea>
-            <button id="sendButton" type="submit">Enviar</button>
-          </form>
         </section>
+
+        <section aria-label="Ejemplos">
+          <h2>Pedidos rapidos</h2>
+          <div class="examples">
+            <button type="button" data-example="Crea un menu premium para un restaurante italiano con entradas, platos fuertes, postres y bebidas.">
+              Menu restaurante
+            </button>
+            <button type="button" data-example="Genera un PDF profesional sobre una agencia de marketing con servicios, precios y propuesta comercial.">
+              PDF comercial
+            </button>
+            <button type="button" data-example="Crea una pagina web moderna para una cafeteria, con HTML, CSS y JavaScript.">
+              Pagina web
+            </button>
+            <button type="button" data-example="Crea una imagen de un robot elegante trabajando en una cocina futurista.">
+              Imagen IA
+            </button>
+          </div>
+        </section>
+      </aside>
+
+      <section class="main-panel" aria-live="polite">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Asistente multimodal</p>
+            <h2>Texto, documentos, codigo, imagenes y video</h2>
+          </div>
+          <select id="formatSelect" aria-label="Formato de documento">
+            <option value="bundle">Paquete completo</option>
+            <option value="pdf">PDF</option>
+            <option value="docx">Word</option>
+            <option value="html">HTML</option>
+            <option value="md">Markdown</option>
+          </select>
+        </header>
+
+        <div id="messages" class="messages">
+          <article class="message ai">
+            <div class="avatar">AI</div>
+            <div class="bubble">
+              Dime lo que quieres crear. Puedo escribir, generar documentos descargables, crear codigo, preparar menus, estructurar libros, hacer imagenes y arrancar videos si tu cuenta tiene acceso.
+            </div>
+          </article>
+        </div>
+
+        <form id="promptForm" class="composer">
+          <label class="sr-only" for="prompt">Peticion</label>
+          <textarea
+            id="prompt"
+            name="prompt"
+            rows="3"
+            placeholder="Ejemplo: Crea un menu de restaurante en PDF o programa una pagina web para mi negocio..."
+            required
+          ></textarea>
+          <button id="sendButton" type="submit">Crear</button>
+        </form>
       </section>
     </main>
 
