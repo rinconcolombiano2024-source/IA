@@ -1,8 +1,8 @@
 {
   "name": "mi-ia",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Una IA sencilla que responde con texto o genera imagenes.",
+  "description": "Una plataforma local de IA para texto, documentos, codigo, imagenes y video.",
   "scripts": {
     "start": "node server.js"
   },
