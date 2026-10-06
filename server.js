@@ -14,6 +14,9 @@ const env = { ...envFile, ...process.env };
 const port = Number(env.PORT || 3000);
 const requestLimit = Number(env.REQUEST_LIMIT_BYTES || 2_000_000);
 
+const appAuthUser = String(env.APP_AUTH_USER || "").trim();
+const appAuthPassword = String(env.APP_AUTH_PASSWORD || "");
+
 ensureDir(dataDir);
 ensureDir(generatedDir);
 
