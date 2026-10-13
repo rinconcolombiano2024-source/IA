@@ -13,6 +13,7 @@ const {
   readJsonBody,
   isClientRequestError
 } = require("./src/http/json-body");
+const { createStateStore } = require("./src/storage/state-store");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
@@ -39,6 +40,16 @@ const responseReserveMs = parsePositiveInteger(env.AI_RESPONSE_RESERVE_MS, 2_000
 const openAiTimeoutMs = parsePositiveInteger(env.OPENAI_TIMEOUT_MS, 120_000, 1_000, 1_800_000);
 const openAiMaxRetries = parsePositiveInteger(env.OPENAI_MAX_RETRIES, 2, 0, 5);
 
+const stateStore = createStateStore({
+  mode: env.AI_STATE_STORE,
+  dataDir,
+  supabaseUrl: env.AI_SUPABASE_URL,
+  supabaseSecretKey: env.AI_SUPABASE_SECRET_KEY,
+  supabaseTable: env.AI_SUPABASE_STATE_TABLE,
+  namespace: env.AI_STATE_NAMESPACE,
+  timeoutMs: env.AI_STATE_TIMEOUT_MS
+});
+
 ensureDir(dataDir);
 ensureDir(generatedDir);
 scrubLegacyPrivacyData();
@@ -61,7 +72,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/api/history") {
-      sendJson(res, 200, { history: loadHistory(30) });
+      sendJson(res, 200, {
+        history: await loadHistory(30),
+        storage: stateStore.summary()
+      });
       return;
     }
 
@@ -164,7 +178,7 @@ async function handleRun(req, res, requestId, deadline) {
     return;
   }
 
-  const history = loadHistory(12);
+  const history = await loadHistoryForContext(12);
   const route =
     requestedMode === "auto"
       ? await classifyIntent(apiKey, prompt, deadline).catch((error) => {
@@ -178,7 +192,7 @@ async function handleRun(req, res, requestId, deadline) {
 
   try {
     result = await runTask({ apiKey, prompt, format, route, job, history, deadline });
-    appendHistory({
+    await recordHistory({
       id: job.id,
       at: new Date().toISOString(),
       requestId,
@@ -193,7 +207,7 @@ async function handleRun(req, res, requestId, deadline) {
       jobId: job.id,
       mode: route.intent
     });
-    appendHistory({
+    await recordHistory({
       id: job.id,
       at: new Date().toISOString(),
       requestId,
@@ -816,6 +830,7 @@ function getHealth() {
       providerTimeoutMs: openAiTimeoutMs,
       providerMaxRetries: openAiMaxRetries
     },
+    stateStore: stateStore.summary(),
     capabilities: [
       "texto",
       "documentos",
@@ -1299,24 +1314,40 @@ function wrapLines(text, maxChars) {
   return lines;
 }
 
-function appendHistory(entry) {
-  const historyPath = path.join(dataDir, "history.json");
-  const history = loadHistory(200);
-  history.unshift(sanitizeHistoryEntry(entry));
-  fs.writeFileSync(historyPath, JSON.stringify(history.slice(0, 200), null, 2), "utf8");
+async function appendHistory(entry) {
+  await stateStore.appendHistory(sanitizeHistoryEntry(entry));
 }
 
-function loadHistory(limit = 20) {
-  const historyPath = path.join(dataDir, "history.json");
-  if (!fs.existsSync(historyPath)) return [];
+async function loadHistory(limit = 20) {
+  const history = await stateStore.loadHistory(limit);
+  return Array.isArray(history)
+    ? history.slice(0, limit).map(sanitizeHistoryEntry)
+    : [];
+}
 
+async function loadHistoryForContext(limit = 20) {
   try {
-    const history = JSON.parse(fs.readFileSync(historyPath, "utf8"));
-    return Array.isArray(history)
-      ? history.slice(0, limit).map(sanitizeHistoryEntry)
-      : [];
-  } catch {
+    return await loadHistory(limit);
+  } catch (error) {
+    logError(error, {
+      component: "state_store",
+      operation: "load_history_context",
+      provider: stateStore.provider
+    });
     return [];
+  }
+}
+
+async function recordHistory(entry) {
+  try {
+    await appendHistory(entry);
+  } catch (error) {
+    logError(error, {
+      component: "state_store",
+      operation: "append_history",
+      provider: stateStore.provider,
+      eventId: entry?.id || ""
+    });
   }
 }
 
