@@ -9,6 +9,10 @@ const {
   getOpenAiRetryDecision,
   getOpenAiNetworkRetryDelay
 } = require("./src/providers/openai/retry-policy");
+const {
+  readJsonBody,
+  isClientRequestError
+} = require("./src/http/json-body");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
@@ -18,7 +22,7 @@ const generatedDir = path.join(writableRoot, "generated");
 const envFile = readEnvFile();
 const env = { ...envFile, ...process.env };
 const port = Number(env.PORT || 3000);
-const requestLimit = Number(env.REQUEST_LIMIT_BYTES || 2_000_000);
+const requestLimit = parsePositiveInteger(env.REQUEST_LIMIT_BYTES, 2_000_000, 1_024, 50_000_000);
 
 const appAuthUser = String(env.APP_AUTH_USER || "").trim();
 const appAuthPassword = String(env.APP_AUTH_PASSWORD || "");
@@ -115,11 +119,13 @@ const server = http.createServer(async (req, res) => {
 
     sendJson(res, 405, { error: "Metodo no permitido." });
   } catch (error) {
-    logError(error, {
-      requestId,
-      route: url.pathname,
-      method: req.method
-    });
+    if (!isClientRequestError(error)) {
+      logError(error, {
+        requestId,
+        route: url.pathname,
+        method: req.method
+      });
+    }
     sendSafeServerError(res, error, requestId);
   }
 });
@@ -137,7 +143,7 @@ async function handleRun(req, res, requestId, deadline) {
     return;
   }
 
-  const body = await readJsonBody(req);
+  const body = await readJsonBody(req, { limitBytes: requestLimit });
   const prompt = String(body.prompt || "").trim();
   const requestedMode = String(body.mode || "auto").toLowerCase();
   const format = String(body.format || "bundle").toLowerCase();
@@ -770,27 +776,6 @@ function extractResponseText(data) {
 function readOpenAIError(data) {
   if (data?.error?.message) return data.error.message;
   return "La API de OpenAI devolvio un error.";
-}
-
-function readJsonBody(req) {
-  return new Promise((resolve, reject) => {
-    let raw = "";
-    req.on("data", (chunk) => {
-      raw += chunk;
-      if (raw.length > requestLimit) {
-        reject(new Error("La peticion es demasiado grande."));
-        req.destroy();
-      }
-    });
-    req.on("end", () => {
-      try {
-        resolve(raw ? JSON.parse(raw) : {});
-      } catch {
-        reject(new Error("El servidor recibio JSON invalido."));
-      }
-    });
-    req.on("error", reject);
-  });
 }
 
 function readEnvFile() {
@@ -1654,6 +1639,21 @@ function createUpstreamTimeoutError() {
 }
 
 function sendSafeServerError(res, error, requestId) {
+  if (isClientRequestError(error)) {
+    const payload = {
+      error: error.publicMessage || "La peticion no es valida.",
+      code: error.code || "INVALID_REQUEST",
+      requestId
+    };
+
+    if (Number.isFinite(error.maxBytes)) {
+      payload.maxBytes = error.maxBytes;
+    }
+
+    sendJson(res, error.statusCode, payload);
+    return;
+  }
+
   if (error?.code === "REQUEST_DEADLINE_EXCEEDED") {
     sendJson(res, 504, {
       error: "La operacion alcanzo el tiempo maximo permitido.",
