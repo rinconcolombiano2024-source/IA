@@ -24,7 +24,10 @@ function normalizeCapabilities(values) {
 function assertProviderAdapter(provider) {
   if (!provider || typeof provider !== "object") throw new Error("Provider adapter must be an object.");
   const id = normalizeProviderId(provider.id);
-  const requiredMethods = ["isConfigured","supports","modelFor","credential","publicSummary"];
+  const requiredMethods = [
+    "isConfigured","supports","modelFor","credential","endpoint","authHeaders",
+    "retryDecision","networkRetryDelay","errorMessage","publicSummary"
+  ];
   for (const method of requiredMethods) {
     if (typeof provider[method] !== "function") {
       throw new Error(`Provider ${id} is missing method ${method}().`);
