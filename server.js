@@ -14,6 +14,8 @@ const {
   isClientRequestError
 } = require("./src/http/json-body");
 const { createStateStore } = require("./src/storage/state-store");
+const { createProviderRegistry } = require("./src/providers/registry");
+const { createOpenAIProvider } = require("./src/providers/openai/provider");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
@@ -39,6 +41,9 @@ const requestDeadlineMs = parsePositiveInteger(env.AI_REQUEST_DEADLINE_MS, 280_0
 const responseReserveMs = parsePositiveInteger(env.AI_RESPONSE_RESERVE_MS, 2_000, 500, 30_000);
 const openAiTimeoutMs = parsePositiveInteger(env.OPENAI_TIMEOUT_MS, 120_000, 1_000, 1_800_000);
 const openAiMaxRetries = parsePositiveInteger(env.OPENAI_MAX_RETRIES, 2, 0, 5);
+
+const openAiProvider = createOpenAIProvider({ env });
+const providerRegistry = createProviderRegistry([openAiProvider]);
 
 const stateStore = createStateStore({
   mode: env.AI_STATE_STORE,
@@ -149,10 +154,14 @@ server.listen(port, () => {
 });
 
 async function handleRun(req, res, requestId, deadline) {
-  const apiKey = env.OPENAI_API_KEY;
-  if (!apiKey || apiKey === "pon-tu-clave-aqui") {
+  const provider = providerRegistry.require("openai");
+  const apiKey = provider.credential();
+
+  if (!provider.isConfigured()) {
     sendJson(res, 400, {
-      error: "Falta OPENAI_API_KEY. Crea un archivo .env con tu clave de OpenAI."
+      error: "El proveedor OpenAI no esta configurado. Define OPENAI_API_KEY en el entorno.",
+      code: "PROVIDER_NOT_CONFIGURED",
+      provider: provider.id
     });
     return;
   }
@@ -549,7 +558,7 @@ function codeInstructions(kind) {
 }
 
 async function generateImage({ apiKey, prompt, job, route, deadline }) {
-  const model = env.OPENAI_IMAGE_MODEL || "gpt-image-2";
+  const model = openAiProvider.modelFor("images");
   const data = await callOpenAIJson("https://api.openai.com/v1/images/generations", apiKey, {
     model,
     prompt,
@@ -581,7 +590,7 @@ async function generateImage({ apiKey, prompt, job, route, deadline }) {
 }
 
 async function generateVideo({ apiKey, prompt, route, deadline }) {
-  const model = env.OPENAI_VIDEO_MODEL || "sora-2";
+  const model = openAiProvider.modelFor("video");
   const form = new FormData();
   form.append("model", model);
   form.append("prompt", prompt);
@@ -611,9 +620,15 @@ async function generateVideo({ apiKey, prompt, route, deadline }) {
 }
 
 async function handleVideoRoute(pathname, res, deadline) {
-  const apiKey = env.OPENAI_API_KEY;
-  if (!apiKey || apiKey === "pon-tu-clave-aqui") {
-    sendJson(res, 400, { error: "Falta OPENAI_API_KEY." });
+  const provider = providerRegistry.require("openai");
+  const apiKey = provider.credential();
+
+  if (!provider.isConfigured()) {
+    sendJson(res, 400, {
+      error: "El proveedor OpenAI no esta configurado.",
+      code: "PROVIDER_NOT_CONFIGURED",
+      provider: provider.id
+    });
     return;
   }
 
@@ -811,7 +826,7 @@ function readEnvFile() {
 }
 
 function textModel() {
-  return env.OPENAI_TEXT_MODEL || "gpt-5.5";
+  return openAiProvider.modelFor("text");
 }
 
 function getHealth() {
@@ -820,9 +835,11 @@ function getHealth() {
     app: "Mi IA",
     version: "2.0.0",
     textModel: textModel(),
-    imageModel: env.OPENAI_IMAGE_MODEL || "gpt-image-2",
-    videoModel: env.OPENAI_VIDEO_MODEL || "sora-2",
-    apiKeyConfigured: Boolean(env.OPENAI_API_KEY && env.OPENAI_API_KEY !== "pon-tu-clave-aqui"),
+    imageModel: openAiProvider.modelFor("images"),
+    videoModel: openAiProvider.modelFor("video"),
+    apiKeyConfigured: openAiProvider.isConfigured(),
+    activeProvider: openAiProvider.id,
+    providers: providerRegistry.listPublic(),
     runtimeProtection: runtimeGuard.snapshot(),
     requestPolicy: {
       deadlineMs: requestDeadlineMs,
