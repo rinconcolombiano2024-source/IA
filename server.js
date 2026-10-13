@@ -19,11 +19,14 @@ const appAuthPassword = String(env.APP_AUTH_PASSWORD || "");
 
 ensureDir(dataDir);
 ensureDir(generatedDir);
+scrubLegacyPrivacyData();
 
 const server = http.createServer(async (req, res) => {
+  const requestId = crypto.randomUUID();
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
   applySecurityHeaders(req, res);
+  res.setHeader("X-Request-ID", requestId);
 
   if (!authorizeRequest(req, res)) {
     return;
@@ -41,7 +44,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/run") {
-      await handleRun(req, res);
+      await handleRun(req, res, requestId);
       return;
     }
 
@@ -57,11 +60,16 @@ const server = http.createServer(async (req, res) => {
 
     sendJson(res, 405, { error: "Metodo no permitido." });
   } catch (error) {
-    logError(error, { route: url.pathname });
+    logError(error, {
+      requestId,
+      route: url.pathname,
+      method: req.method
+    });
     sendJson(res, 500, {
       error: "La IA encontro un problema interno.",
-      detail: error.message || "Error inesperado.",
-      recovery: "El servidor registro el fallo y puedes volver a intentar la peticion."
+      code: "INTERNAL_ERROR",
+      requestId,
+      recovery: "El fallo fue registrado de forma segura. Puedes volver a intentar la peticion."
     });
   }
 });
@@ -70,7 +78,7 @@ server.listen(port, () => {
   console.log(`Mi IA esta lista en http://localhost:${port}`);
 });
 
-async function handleRun(req, res) {
+async function handleRun(req, res, requestId) {
   const apiKey = env.OPENAI_API_KEY;
   if (!apiKey || apiKey === "pon-tu-clave-aqui") {
     sendJson(res, 400, {
@@ -95,7 +103,7 @@ async function handleRun(req, res) {
       ? await classifyIntent(apiKey, prompt).catch(() => inferIntent(prompt))
       : modeToRoute(requestedMode, prompt);
 
-  const job = createJob(route.intent, route.title || prompt);
+  const job = createJob(route.intent);
   let result;
 
   try {
@@ -103,22 +111,26 @@ async function handleRun(req, res) {
     appendHistory({
       id: job.id,
       at: new Date().toISOString(),
-      prompt,
+      requestId,
       mode: route.intent,
-      title: result.title || route.title || "Trabajo de IA",
+      title: historyTitleForMode(route.intent),
       status: "ok",
       files: result.files || []
     });
   } catch (error) {
-    logError(error, { jobId: job.id, prompt, mode: route.intent });
+    logError(error, {
+      requestId,
+      jobId: job.id,
+      mode: route.intent
+    });
     appendHistory({
       id: job.id,
       at: new Date().toISOString(),
-      prompt,
+      requestId,
       mode: route.intent,
-      title: route.title || "Trabajo con error",
+      title: historyTitleForMode(route.intent),
       status: "error",
-      error: error.message
+      errorCode: "TASK_FAILED"
     });
     throw error;
   }
@@ -268,8 +280,7 @@ async function generateDocument(context, kind) {
       id: job.id,
       kind,
       title,
-      createdAt: new Date().toISOString(),
-      prompt
+      createdAt: new Date().toISOString()
     },
     null,
     2
@@ -708,14 +719,14 @@ function getHealth() {
   };
 }
 
-function createJob(intent, title) {
+function createJob(intent) {
   const id = `${new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${crypto
     .randomBytes(4)
     .toString("hex")}`;
   const dir = ensureDir(path.join(generatedDir, id));
   fs.writeFileSync(
     path.join(dir, "job.json"),
-    JSON.stringify({ id, intent, title: makeTitle(title), createdAt: new Date().toISOString() }, null, 2),
+    JSON.stringify({ id, intent, title: historyTitleForMode(intent), createdAt: new Date().toISOString() }, null, 2),
     "utf8"
   );
   return { id, dir };
@@ -1177,7 +1188,7 @@ function wrapLines(text, maxChars) {
 function appendHistory(entry) {
   const historyPath = path.join(dataDir, "history.json");
   const history = loadHistory(200);
-  history.unshift(entry);
+  history.unshift(sanitizeHistoryEntry(entry));
   fs.writeFileSync(historyPath, JSON.stringify(history.slice(0, 200), null, 2), "utf8");
 }
 
@@ -1187,10 +1198,54 @@ function loadHistory(limit = 20) {
 
   try {
     const history = JSON.parse(fs.readFileSync(historyPath, "utf8"));
-    return Array.isArray(history) ? history.slice(0, limit) : [];
+    return Array.isArray(history)
+      ? history.slice(0, limit).map(sanitizeHistoryEntry)
+      : [];
   } catch {
     return [];
   }
+}
+
+function sanitizeHistoryEntry(entry = {}) {
+  const safe = {
+    id: String(entry.id || "").slice(0, 128),
+    at: String(entry.at || "").slice(0, 64),
+    requestId: String(entry.requestId || "").slice(0, 128),
+    mode: String(entry.mode || "").slice(0, 64),
+    title: historyTitleForMode(entry.mode),
+    status: entry.status === "error" ? "error" : "ok"
+  };
+
+  if (Array.isArray(entry.files)) {
+    safe.files = entry.files.slice(0, 50).map((file) => ({
+      name: sanitizeFileName(file?.name || "archivo"),
+      url: String(file?.url || "").slice(0, 1000),
+      type: String(file?.type || "application/octet-stream").slice(0, 200),
+      size: Number.isFinite(Number(file?.size)) ? Number(file.size) : 0
+    }));
+  }
+
+  if (entry.errorCode) {
+    safe.errorCode = String(entry.errorCode).slice(0, 64);
+  }
+
+  return safe;
+}
+
+function historyTitleForMode(mode) {
+  const labels = {
+    text: "Conversacion de IA",
+    image: "Generacion de imagen",
+    document: "Generacion de documento",
+    restaurant: "Documento de restaurante",
+    book: "Generacion de libro",
+    code: "Generacion de codigo",
+    website: "Generacion de sitio web",
+    video: "Generacion de video",
+    repair: "Diagnostico tecnico"
+  };
+
+  return labels[String(mode || "").toLowerCase()] || "Trabajo de IA";
 }
 
 function memoryContext(history) {
@@ -1208,11 +1263,104 @@ function logError(error, context = {}) {
   const errorPath = path.join(dataDir, "errors.log");
   const entry = JSON.stringify({
     at: new Date().toISOString(),
-    message: error.message,
-    stack: error.stack,
-    context
+    message: redactSensitiveText(error?.message || "Error inesperado.").slice(0, 4000),
+    stack: redactSensitiveText(error?.stack || "").slice(0, 12000),
+    context: sanitizeLogValue(context)
   });
   fs.appendFileSync(errorPath, `${entry}\n`, "utf8");
+}
+
+function sanitizeLogValue(value, depth = 0) {
+  if (depth > 5) return "[TRUNCATED]";
+  if (value === null || value === undefined) return value;
+  if (typeof value === "string") return redactSensitiveText(value).slice(0, 4000);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.slice(0, 50).map((item) => sanitizeLogValue(item, depth + 1));
+  if (typeof value !== "object") return String(value).slice(0, 4000);
+
+  const safe = {};
+  for (const [key, nestedValue] of Object.entries(value).slice(0, 100)) {
+    if (/^(prompt|password|pass|authorization|cookie|token|secret|api[_-]?key|private[_-]?key)$/i.test(key)) {
+      safe[key] = "[REDACTED]";
+      continue;
+    }
+    safe[key] = sanitizeLogValue(nestedValue, depth + 1);
+  }
+  return safe;
+}
+
+function redactSensitiveText(value) {
+  return String(value || "")
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/gi, "[REDACTED_PRIVATE_KEY]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+\/=-]{8,}/gi, "Bearer [REDACTED]")
+    .replace(/\bBasic\s+[A-Za-z0-9+/=]{8,}/gi, "Basic [REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}/g, "sk-[REDACTED]")
+    .replace(/((?:api[_-]?key|password|passwd|token|secret|private[_-]?key)\s*[:=]\s*)[^\s,;]+/gi, "$1[REDACTED]")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s\/@:]+:[^\s\/@]+@/gi, "$1[REDACTED]@")
+    .slice(0, 20000);
+}
+
+function scrubLegacyPrivacyData() {
+  scrubLegacyHistoryFile();
+  scrubLegacyErrorLog();
+}
+
+function scrubLegacyHistoryFile() {
+  const historyPath = path.join(dataDir, "history.json");
+  if (!fs.existsSync(historyPath)) return;
+
+  try {
+    const raw = JSON.parse(fs.readFileSync(historyPath, "utf8"));
+    if (!Array.isArray(raw)) return;
+
+    const sanitized = raw.slice(0, 200).map((entry) => sanitizeHistoryEntry(entry));
+
+    fs.writeFileSync(historyPath, JSON.stringify(sanitized, null, 2), "utf8");
+  } catch {
+    try {
+      fs.writeFileSync(historyPath, "[]\n", "utf8");
+    } catch {
+      // No bloquear el arranque si el archivo legado no puede sanearse.
+    }
+  }
+}
+
+function scrubLegacyErrorLog() {
+  const errorPath = path.join(dataDir, "errors.log");
+  if (!fs.existsSync(errorPath)) return;
+
+  try {
+    const stat = fs.statSync(errorPath);
+    if (!stat.isFile()) return;
+
+    if (stat.size > 5_000_000) {
+      fs.writeFileSync(errorPath, "", "utf8");
+      return;
+    }
+
+    const lines = fs.readFileSync(errorPath, "utf8").split(/\r?\n/).filter(Boolean);
+    const sanitizedLines = lines.slice(-2000).map((line) => {
+      try {
+        const entry = JSON.parse(line);
+        return JSON.stringify({
+          at: String(entry.at || "").slice(0, 64),
+          message: redactSensitiveText(entry.message || "").slice(0, 4000),
+          stack: redactSensitiveText(entry.stack || "").slice(0, 12000),
+          context: sanitizeLogValue(entry.context || {})
+        });
+      } catch {
+        return JSON.stringify({
+          at: new Date().toISOString(),
+          message: "Legacy log entry redacted",
+          context: {}
+        });
+      }
+    });
+
+    fs.writeFileSync(errorPath, sanitizedLines.length ? `${sanitizedLines.join("\n")}\n` : "", "utf8");
+  } catch {
+    // No bloquear el arranque por un problema de saneamiento de logs legados.
+  }
 }
 
 function collectFiles(dir) {
@@ -1273,7 +1421,7 @@ function encodePathSegments(value) {
 }
 
 function makeTitle(value) {
-  const title = String(value || "Trabajo de IA")
+  const title = redactSensitiveText(String(value || "Trabajo de IA"))
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 72);
