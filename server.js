@@ -3,7 +3,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
-const { createRuntimeGuard } = require("./src/security/runtime-guard");
+const { createRuntimeGuard, parsePositiveInteger } = require("./src/security/runtime-guard");
+const { createRequestDeadline } = require("./src/core/request-deadline");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
@@ -24,6 +25,11 @@ const runtimeGuard = createRuntimeGuard({
   maxConcurrentRuns: env.AI_MAX_CONCURRENT_RUNS,
   maxPromptChars: env.AI_MAX_PROMPT_CHARS
 });
+
+const requestDeadlineMs = parsePositiveInteger(env.AI_REQUEST_DEADLINE_MS, 280_000, 10_000, 1_800_000);
+const responseReserveMs = parsePositiveInteger(env.AI_RESPONSE_RESERVE_MS, 2_000, 500, 30_000);
+const openAiTimeoutMs = parsePositiveInteger(env.OPENAI_TIMEOUT_MS, 120_000, 1_000, 1_800_000);
+const openAiMaxRetries = parsePositiveInteger(env.OPENAI_MAX_RETRIES, 2, 0, 5);
 
 ensureDir(dataDir);
 ensureDir(generatedDir);
@@ -76,8 +82,13 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
+      const deadline = createRequestDeadline({
+        deadlineMs: requestDeadlineMs,
+        responseReserveMs
+      });
+
       try {
-        await handleRun(req, res, requestId);
+        await handleRun(req, res, requestId, deadline);
       } finally {
         runtimeGuard.releaseRun();
       }
@@ -85,7 +96,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname.startsWith("/api/video/")) {
-      await handleVideoRoute(url.pathname, res);
+      const deadline = createRequestDeadline({
+        deadlineMs: requestDeadlineMs,
+        responseReserveMs
+      });
+      await handleVideoRoute(url.pathname, res, deadline);
       return;
     }
 
@@ -101,12 +116,7 @@ const server = http.createServer(async (req, res) => {
       route: url.pathname,
       method: req.method
     });
-    sendJson(res, 500, {
-      error: "La IA encontro un problema interno.",
-      code: "INTERNAL_ERROR",
-      requestId,
-      recovery: "El fallo fue registrado de forma segura. Puedes volver a intentar la peticion."
-    });
+    sendSafeServerError(res, error, requestId);
   }
 });
 
@@ -114,7 +124,7 @@ server.listen(port, () => {
   console.log(`Mi IA esta lista en http://localhost:${port}`);
 });
 
-async function handleRun(req, res, requestId) {
+async function handleRun(req, res, requestId, deadline) {
   const apiKey = env.OPENAI_API_KEY;
   if (!apiKey || apiKey === "pon-tu-clave-aqui") {
     sendJson(res, 400, {
@@ -147,14 +157,17 @@ async function handleRun(req, res, requestId) {
   const history = loadHistory(12);
   const route =
     requestedMode === "auto"
-      ? await classifyIntent(apiKey, prompt).catch(() => inferIntent(prompt))
+      ? await classifyIntent(apiKey, prompt, deadline).catch((error) => {
+          if (error?.code === "REQUEST_DEADLINE_EXCEEDED") throw error;
+          return inferIntent(prompt);
+        })
       : modeToRoute(requestedMode, prompt);
 
   const job = createJob(route.intent);
   let result;
 
   try {
-    result = await runTask({ apiKey, prompt, format, route, job, history });
+    result = await runTask({ apiKey, prompt, format, route, job, history, deadline });
     appendHistory({
       id: job.id,
       at: new Date().toISOString(),
@@ -200,7 +213,7 @@ async function runTask(context) {
   return generateText(context);
 }
 
-async function classifyIntent(apiKey, prompt) {
+async function classifyIntent(apiKey, prompt, deadline) {
   const data = await createResponse(apiKey, {
     model: textModel(),
     reasoning: { effort: env.OPENAI_ROUTER_REASONING || "low" },
@@ -240,7 +253,7 @@ async function classifyIntent(apiKey, prompt) {
         }
       }
     }
-  });
+  }, deadline, 0);
 
   return safeJsonParse(extractResponseText(data)) || inferIntent(prompt);
 }
@@ -286,7 +299,7 @@ function inferIntent(prompt) {
   return { intent: "text", title: makeTitle(prompt), format: "text", language: "es", confidence: 0.5, notes: "" };
 }
 
-async function generateText({ apiKey, prompt, history, route }) {
+async function generateText({ apiKey, prompt, history, route, deadline }) {
   const data = await createResponse(apiKey, {
     model: textModel(),
     reasoning: { effort: env.OPENAI_REASONING_EFFORT || "medium" },
@@ -298,7 +311,7 @@ async function generateText({ apiKey, prompt, history, route }) {
       memoryContext(history)
     ].join("\n"),
     input: prompt
-  });
+  }, deadline);
 
   return {
     type: "text",
@@ -309,14 +322,14 @@ async function generateText({ apiKey, prompt, history, route }) {
 }
 
 async function generateDocument(context, kind) {
-  const { apiKey, prompt, job, route, format } = context;
+  const { apiKey, prompt, job, route, format, deadline } = context;
   const instructions = documentInstructions(kind);
   const data = await createResponse(apiKey, {
     model: textModel(),
     reasoning: { effort: env.OPENAI_REASONING_EFFORT || "medium" },
     instructions,
     input: prompt
-  });
+  }, deadline);
 
   const markdown = normalizeMarkdown(extractResponseText(data), route.title || makeTitle(prompt));
   const title = extractMarkdownTitle(markdown) || route.title || makeTitle(prompt);
@@ -400,7 +413,7 @@ function documentInstructions(kind) {
 }
 
 async function generateCodePackage(context, kind) {
-  const { apiKey, prompt, job, route } = context;
+  const { apiKey, prompt, job, route, deadline } = context;
   const schema = {
     type: "object",
     additionalProperties: false,
@@ -440,7 +453,7 @@ async function generateCodePackage(context, kind) {
         schema
       }
     }
-  });
+  }, deadline);
 
   const parsed = safeJsonParse(extractResponseText(data));
   if (!parsed || !Array.isArray(parsed.files)) {
@@ -511,7 +524,7 @@ function codeInstructions(kind) {
   return base.join("\n");
 }
 
-async function generateImage({ apiKey, prompt, job, route }) {
+async function generateImage({ apiKey, prompt, job, route, deadline }) {
   const model = env.OPENAI_IMAGE_MODEL || "gpt-image-2";
   const data = await callOpenAIJson("https://api.openai.com/v1/images/generations", apiKey, {
     model,
@@ -519,7 +532,7 @@ async function generateImage({ apiKey, prompt, job, route }) {
     size: env.OPENAI_IMAGE_SIZE || "1024x1024",
     quality: env.OPENAI_IMAGE_QUALITY || "medium",
     n: 1
-  });
+  }, deadline);
 
   const firstImage = Array.isArray(data.data) ? data.data[0] : null;
   if (!firstImage) throw new Error("La API no devolvio una imagen.");
@@ -543,7 +556,7 @@ async function generateImage({ apiKey, prompt, job, route }) {
   };
 }
 
-async function generateVideo({ apiKey, prompt, route }) {
+async function generateVideo({ apiKey, prompt, route, deadline }) {
   const model = env.OPENAI_VIDEO_MODEL || "sora-2";
   const form = new FormData();
   form.append("model", model);
@@ -555,7 +568,7 @@ async function generateVideo({ apiKey, prompt, route }) {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
     body: form
-  });
+  }, deadline);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(readOpenAIError(data));
 
@@ -573,7 +586,7 @@ async function generateVideo({ apiKey, prompt, route }) {
   };
 }
 
-async function handleVideoRoute(pathname, res) {
+async function handleVideoRoute(pathname, res, deadline) {
   const apiKey = env.OPENAI_API_KEY;
   if (!apiKey || apiKey === "pon-tu-clave-aqui") {
     sendJson(res, 400, { error: "Falta OPENAI_API_KEY." });
@@ -591,7 +604,7 @@ async function handleVideoRoute(pathname, res) {
   if (action === "content") {
     const response = await fetchWithRetry(`https://api.openai.com/v1/videos/${encodeURIComponent(videoId)}/content`, {
       headers: { Authorization: `Bearer ${apiKey}` }
-    });
+    }, deadline);
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       sendJson(res, response.status, { error: readOpenAIError(data) });
@@ -608,12 +621,12 @@ async function handleVideoRoute(pathname, res) {
 
   const response = await fetchWithRetry(`https://api.openai.com/v1/videos/${encodeURIComponent(videoId)}`, {
     headers: { Authorization: `Bearer ${apiKey}` }
-  });
+  }, deadline);
   const data = await response.json().catch(() => ({}));
   sendJson(res, response.status, data);
 }
 
-async function diagnoseAndRepair({ apiKey, prompt, history, route }) {
+async function diagnoseAndRepair({ apiKey, prompt, history, route, deadline }) {
   const data = await createResponse(apiKey, {
     model: textModel(),
     reasoning: { effort: env.OPENAI_REASONING_EFFORT || "medium" },
@@ -625,7 +638,7 @@ async function diagnoseAndRepair({ apiKey, prompt, history, route }) {
       memoryContext(history)
     ].join("\n"),
     input: prompt
-  });
+  }, deadline);
 
   return {
     type: "repair",
@@ -635,11 +648,11 @@ async function diagnoseAndRepair({ apiKey, prompt, history, route }) {
   };
 }
 
-async function createResponse(apiKey, payload) {
-  return callOpenAIJson("https://api.openai.com/v1/responses", apiKey, payload);
+async function createResponse(apiKey, payload, deadline, retries = openAiMaxRetries) {
+  return callOpenAIJson("https://api.openai.com/v1/responses", apiKey, payload, deadline, retries);
 }
 
-async function callOpenAIJson(url, apiKey, payload) {
+async function callOpenAIJson(url, apiKey, payload, deadline, retries = openAiMaxRetries) {
   const response = await fetchWithRetry(url, {
     method: "POST",
     headers: {
@@ -647,33 +660,64 @@ async function callOpenAIJson(url, apiKey, payload) {
       "Content-Type": "application/json"
     },
     body: JSON.stringify(payload)
-  });
+  }, deadline, retries);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(readOpenAIError(data));
   return data;
 }
 
-async function fetchWithRetry(url, options, retries = 2) {
+async function fetchWithRetry(url, options, deadline, retries = openAiMaxRetries) {
   let lastError;
+  const maxRetries = parsePositiveInteger(retries, openAiMaxRetries, 0, 5);
 
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const attemptTimeoutMs = deadline?.attemptTimeoutMs(openAiTimeoutMs) ?? openAiTimeoutMs;
+
+    if (attemptTimeoutMs < 1_000) {
+      throw createDeadlineError();
+    }
+
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), Number(env.OPENAI_TIMEOUT_MS || 120_000));
+    const timeout = setTimeout(() => controller.abort(), attemptTimeoutMs);
 
     try {
       const response = await fetch(url, { ...options, signal: controller.signal });
-      clearTimeout(timeout);
 
-      if (![408, 409, 429, 500, 502, 503, 504].includes(response.status) || attempt === retries) {
+      if (![408, 409, 429, 500, 502, 503, 504].includes(response.status) || attempt === maxRetries) {
         return response;
       }
 
-      await sleep(700 * (attempt + 1));
+      const retryDelayMs = 700 * (attempt + 1);
+      if (deadline && !deadline.canWait(retryDelayMs, 1_000)) {
+        return response;
+      }
+
+      if (response.body && typeof response.body.cancel === "function") {
+        await response.body.cancel().catch(() => {});
+      }
+
+      await sleep(retryDelayMs);
     } catch (error) {
+      const aborted = error?.name === "AbortError";
+
+      if (aborted && deadline && deadline.usableMs() < 1_000) {
+        throw createDeadlineError();
+      }
+
+      lastError = aborted ? createUpstreamTimeoutError() : error;
+
+      if (attempt === maxRetries) {
+        throw lastError;
+      }
+
+      const retryDelayMs = 700 * (attempt + 1);
+      if (deadline && !deadline.canWait(retryDelayMs, 1_000)) {
+        throw lastError;
+      }
+
+      await sleep(retryDelayMs);
+    } finally {
       clearTimeout(timeout);
-      lastError = error;
-      if (attempt === retries) throw error;
-      await sleep(700 * (attempt + 1));
     }
   }
 
@@ -750,6 +794,12 @@ function getHealth() {
     videoModel: env.OPENAI_VIDEO_MODEL || "sora-2",
     apiKeyConfigured: Boolean(env.OPENAI_API_KEY && env.OPENAI_API_KEY !== "pon-tu-clave-aqui"),
     runtimeProtection: runtimeGuard.snapshot(),
+    requestPolicy: {
+      deadlineMs: requestDeadlineMs,
+      responseReserveMs,
+      providerTimeoutMs: openAiTimeoutMs,
+      providerMaxRetries: openAiMaxRetries
+    },
     capabilities: [
       "texto",
       "documentos",
@@ -1558,6 +1608,47 @@ function applySecurityHeaders(req, res) {
       "max-age=31536000; includeSubDomains"
     );
   }
+}
+
+function createDeadlineError() {
+  const error = new Error("La peticion alcanzo su tiempo maximo de ejecucion.");
+  error.code = "REQUEST_DEADLINE_EXCEEDED";
+  return error;
+}
+
+function createUpstreamTimeoutError() {
+  const error = new Error("El proveedor de IA no respondio dentro del tiempo permitido.");
+  error.code = "UPSTREAM_TIMEOUT";
+  return error;
+}
+
+function sendSafeServerError(res, error, requestId) {
+  if (error?.code === "REQUEST_DEADLINE_EXCEEDED") {
+    sendJson(res, 504, {
+      error: "La operacion alcanzo el tiempo maximo permitido.",
+      code: "REQUEST_DEADLINE_EXCEEDED",
+      requestId,
+      recovery: "La solicitud fue detenida de forma controlada antes del limite de infraestructura."
+    });
+    return;
+  }
+
+  if (error?.code === "UPSTREAM_TIMEOUT") {
+    sendJson(res, 504, {
+      error: "El proveedor de IA tardo demasiado en responder.",
+      code: "UPSTREAM_TIMEOUT",
+      requestId,
+      recovery: "Puedes volver a intentar la solicitud."
+    });
+    return;
+  }
+
+  sendJson(res, 500, {
+    error: "La IA encontro un problema interno.",
+    code: "INTERNAL_ERROR",
+    requestId,
+    recovery: "El fallo fue registrado de forma segura. Puedes volver a intentar la peticion."
+  });
 }
 
 function applyRunRateLimitHeaders(res, allowance) {
