@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { createRuntimeGuard } = require("./src/security/runtime-guard");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
@@ -16,6 +17,13 @@ const requestLimit = Number(env.REQUEST_LIMIT_BYTES || 2_000_000);
 
 const appAuthUser = String(env.APP_AUTH_USER || "").trim();
 const appAuthPassword = String(env.APP_AUTH_PASSWORD || "");
+
+const runtimeGuard = createRuntimeGuard({
+  windowMs: env.AI_RUN_RATE_WINDOW_MS,
+  maxRuns: env.AI_RUN_RATE_MAX,
+  maxConcurrentRuns: env.AI_MAX_CONCURRENT_RUNS,
+  maxPromptChars: env.AI_MAX_PROMPT_CHARS
+});
 
 ensureDir(dataDir);
 ensureDir(generatedDir);
@@ -44,7 +52,35 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/run") {
-      await handleRun(req, res, requestId);
+      const allowance = runtimeGuard.consumeRun();
+      applyRunRateLimitHeaders(res, allowance);
+
+      if (!allowance.allowed) {
+        sendJson(res, 429, {
+          error: "Se alcanzo el limite temporal de ejecuciones de IA.",
+          code: "RATE_LIMITED",
+          requestId,
+          retryAfterSeconds: allowance.retryAfterSeconds
+        });
+        return;
+      }
+
+      if (!runtimeGuard.tryAcquireRun()) {
+        res.setHeader("Retry-After", "2");
+        sendJson(res, 503, {
+          error: "La IA esta procesando el maximo de trabajos simultaneos permitido.",
+          code: "SERVER_BUSY",
+          requestId,
+          retryAfterSeconds: 2
+        });
+        return;
+      }
+
+      try {
+        await handleRun(req, res, requestId);
+      } finally {
+        runtimeGuard.releaseRun();
+      }
       return;
     }
 
@@ -94,6 +130,17 @@ async function handleRun(req, res, requestId) {
 
   if (!prompt) {
     sendJson(res, 400, { error: "Escribe una peticion para la IA." });
+    return;
+  }
+
+  const promptValidation = runtimeGuard.validatePrompt(prompt);
+  if (!promptValidation.ok) {
+    sendJson(res, 413, {
+      error: "La peticion supera el limite de texto permitido.",
+      code: promptValidation.code,
+      requestId,
+      maxPromptChars: promptValidation.maxPromptChars
+    });
     return;
   }
 
@@ -702,6 +749,7 @@ function getHealth() {
     imageModel: env.OPENAI_IMAGE_MODEL || "gpt-image-2",
     videoModel: env.OPENAI_VIDEO_MODEL || "sora-2",
     apiKeyConfigured: Boolean(env.OPENAI_API_KEY && env.OPENAI_API_KEY !== "pon-tu-clave-aqui"),
+    runtimeProtection: runtimeGuard.snapshot(),
     capabilities: [
       "texto",
       "documentos",
@@ -1509,6 +1557,16 @@ function applySecurityHeaders(req, res) {
       "Strict-Transport-Security",
       "max-age=31536000; includeSubDomains"
     );
+  }
+}
+
+function applyRunRateLimitHeaders(res, allowance) {
+  res.setHeader("X-RateLimit-Limit", String(allowance.limit));
+  res.setHeader("X-RateLimit-Remaining", String(allowance.remaining));
+  res.setHeader("X-RateLimit-Reset", String(Math.ceil(allowance.resetAt / 1000)));
+
+  if (!allowance.allowed && allowance.retryAfterSeconds > 0) {
+    res.setHeader("Retry-After", String(allowance.retryAfterSeconds));
   }
 }
 
