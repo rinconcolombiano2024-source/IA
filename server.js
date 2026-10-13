@@ -5,6 +5,10 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { createRuntimeGuard, parsePositiveInteger } = require("./src/security/runtime-guard");
 const { createRequestDeadline } = require("./src/core/request-deadline");
+const {
+  getOpenAiRetryDecision,
+  getOpenAiNetworkRetryDelay
+} = require("./src/providers/openai/retry-policy");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
@@ -683,12 +687,24 @@ async function fetchWithRetry(url, options, deadline, retries = openAiMaxRetries
     try {
       const response = await fetch(url, { ...options, signal: controller.signal });
 
-      if (![408, 409, 429, 500, 502, 503, 504].includes(response.status) || attempt === maxRetries) {
+      if (attempt === maxRetries) {
         return response;
       }
 
-      const retryDelayMs = 700 * (attempt + 1);
-      if (deadline && !deadline.canWait(retryDelayMs, 1_000)) {
+      const retryContext = await readOpenAiRetryContext(response);
+      const decision = getOpenAiRetryDecision({
+        status: response.status,
+        errorCode: retryContext.errorCode,
+        errorType: retryContext.errorType,
+        retryAfter: response.headers.get("retry-after"),
+        attempt
+      });
+
+      if (!decision.retry) {
+        return response;
+      }
+
+      if (deadline && !deadline.canWait(decision.delayMs, 1_000)) {
         return response;
       }
 
@@ -696,7 +712,7 @@ async function fetchWithRetry(url, options, deadline, retries = openAiMaxRetries
         await response.body.cancel().catch(() => {});
       }
 
-      await sleep(retryDelayMs);
+      await sleep(decision.delayMs);
     } catch (error) {
       const aborted = error?.name === "AbortError";
 
@@ -710,7 +726,7 @@ async function fetchWithRetry(url, options, deadline, retries = openAiMaxRetries
         throw lastError;
       }
 
-      const retryDelayMs = 700 * (attempt + 1);
+      const retryDelayMs = getOpenAiNetworkRetryDelay(attempt);
       if (deadline && !deadline.canWait(retryDelayMs, 1_000)) {
         throw lastError;
       }
@@ -724,6 +740,21 @@ async function fetchWithRetry(url, options, deadline, retries = openAiMaxRetries
   throw lastError || new Error("No se pudo conectar con OpenAI.");
 }
 
+async function readOpenAiRetryContext(response) {
+  if (!response || response.ok) {
+    return { errorCode: "", errorType: "" };
+  }
+
+  try {
+    const data = await response.clone().json();
+    return {
+      errorCode: data?.error?.code || "",
+      errorType: data?.error?.type || ""
+    };
+  } catch {
+    return { errorCode: "", errorType: "" };
+  }
+}
 function extractResponseText(data) {
   if (typeof data.output_text === "string") return data.output_text.trim();
   if (!Array.isArray(data.output)) return "";
