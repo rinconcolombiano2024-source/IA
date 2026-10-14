@@ -4,6 +4,7 @@ const os = require("node:os");
 const path = require("node:path");
 const crypto = require("node:crypto");
 const { createRuntimeGuard, parsePositiveInteger } = require("./src/security/runtime-guard");
+const { isPublicRequest } = require("./src/security/public-routes");
 const { createRequestDeadline } = require("./src/core/request-deadline");
 const {
   readJsonBody,
@@ -97,11 +98,20 @@ const server = http.createServer(async (req, res) => {
   applySecurityHeaders(req, res);
   res.setHeader("X-Request-ID", requestId);
 
-  if (!authorizeRequest(req, res)) {
+  if (!isPublicRequest(req.method, url.pathname) && !authorizeRequest(req, res)) {
     return;
   }
 
   try {
+    if (req.method === "GET" && url.pathname === "/api/public-status") {
+      sendJson(res, 200, {
+        ok: true,
+        publicAccess: true,
+        requiresAuthenticationForGeneration: true
+      });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/health") {
       sendJson(res, 200, getHealth());
       return;
@@ -1973,7 +1983,7 @@ function authorizeRequest(req, res) {
   const authorization = String(req.headers.authorization || "");
 
   if (!authorization.startsWith("Basic ") || authorization.length > 4096) {
-    sendAuthChallenge(res);
+    sendAuthChallenge(res, req);
     return false;
   }
 
@@ -1985,14 +1995,14 @@ function authorizeRequest(req, res) {
       "base64"
     ).toString("utf8");
   } catch {
-    sendAuthChallenge(res);
+    sendAuthChallenge(res, req);
     return false;
   }
 
   const separatorIndex = decoded.indexOf(":");
 
   if (separatorIndex <= 0) {
-    sendAuthChallenge(res);
+    sendAuthChallenge(res, req);
     return false;
   }
 
@@ -2003,7 +2013,7 @@ function authorizeRequest(req, res) {
     !secureStringEqual(username, appAuthUser) ||
     !secureStringEqual(password, appAuthPassword)
   ) {
-    sendAuthChallenge(res);
+    sendAuthChallenge(res, req);
     return false;
   }
 
@@ -2024,9 +2034,11 @@ function secureStringEqual(leftValue, rightValue) {
   return crypto.timingSafeEqual(leftHash, rightHash);
 }
 
-function sendAuthChallenge(res) {
+function sendAuthChallenge(res, req) {
+  // API fetches receive JSON without triggering a browser-wide Basic dialog.
+  const wantsJson = String(req.headers.accept || "").toLowerCase().includes("application/json");
   res.writeHead(401, {
-    "WWW-Authenticate": 'Basic realm="Mi IA", charset="UTF-8"',
+    ...(wantsJson ? {} : { "WWW-Authenticate": 'Basic realm="Mi IA", charset="UTF-8"' }),
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store"
   });
