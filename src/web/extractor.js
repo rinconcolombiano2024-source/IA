@@ -69,10 +69,48 @@ function extractWebContent(fetchResult) {
   throw new Error("Unsupported extracted web content type.");
 }
 
+
+function extractLinks(html, baseUrl, options = {}) {
+  const sameOrigin = options.sameOrigin !== false;
+  const maxLinks = Number.isFinite(Number(options.maxLinks))
+    ? Math.max(1,Math.min(1000,Number(options.maxLinks)))
+    : 200;
+  const base = new URL(String(baseUrl || ""));
+  const cleaned=stripActiveAndHiddenHtml(html);
+  const links=[];
+  const seen=new Set();
+  const re=/<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/gi;
+  let match;
+
+  while((match=re.exec(cleaned)) && links.length < maxLinks) {
+    const raw=decodeHtmlEntities(match[1] || match[2] || match[3] || "").trim();
+    if(!raw || raw.startsWith("#")) continue;
+
+    let url;
+    try {
+      url=new URL(raw,base);
+    } catch {
+      continue;
+    }
+
+    if(!["http:","https:"].includes(url.protocol)) continue;
+    url.hash="";
+    if(sameOrigin && url.origin !== base.origin) continue;
+
+    const normalized=url.toString();
+    if(seen.has(normalized)) continue;
+    seen.add(normalized);
+    links.push(normalized);
+  }
+
+  return links;
+}
+
 module.exports={
   decodeHtmlEntities,
   stripActiveAndHiddenHtml,
   extractTitle,
   htmlToText,
+  extractLinks,
   extractWebContent
 };
