@@ -27,10 +27,20 @@ function normalizeBaseUrl(value) {
   return url.toString().replace(/\/$/, "");
 }
 
+function normalizeInteger(value, fallback, min, max) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
 function createOpenAIProvider(options = {}) {
   const env = options.env || {};
   const apiKey = normalizeApiKey(env.OPENAI_API_KEY);
   const baseUrl = normalizeBaseUrl(env.OPENAI_BASE_URL);
+  const policy = Object.freeze({
+    timeoutMs: normalizeInteger(env.OPENAI_TIMEOUT_MS, 120_000, 1_000, 1_800_000),
+    maxRetries: normalizeInteger(env.OPENAI_MAX_RETRIES, 2, 0, 5)
+  });
   const models = Object.freeze({
     text: normalizeModel(env.OPENAI_TEXT_MODEL, "gpt-5.5"),
     image: normalizeModel(env.OPENAI_IMAGE_MODEL, "gpt-image-2"),
@@ -202,6 +212,10 @@ function createOpenAIProvider(options = {}) {
     });
   }
 
+  function requestPolicy() {
+    return policy;
+  }
+
   function networkRetryDelay(attempt) {
     return getOpenAiNetworkRetryDelay(attempt);
   }
@@ -235,10 +249,18 @@ function createOpenAIProvider(options = {}) {
     buildTextRequest,
     buildStructuredRequest,
     extractText,
+    requestPolicy,
     retryDecision,
     networkRetryDelay,
     errorMessage,
     publicSummary
   });
 }
-module.exports = { DEFAULT_BASE_URL, createOpenAIProvider, normalizeApiKey, normalizeModel, normalizeBaseUrl };
+module.exports = {
+  DEFAULT_BASE_URL,
+  createOpenAIProvider,
+  normalizeApiKey,
+  normalizeModel,
+  normalizeBaseUrl,
+  normalizeInteger
+};
