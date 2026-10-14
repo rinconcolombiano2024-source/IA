@@ -12,6 +12,7 @@ const {
 const { createStateStore } = require("./src/storage/state-store");
 const { createProviderRegistry } = require("./src/providers/registry");
 const { createOpenAIProvider } = require("./src/providers/openai/provider");
+const { createAnthropicProvider } = require("./src/providers/anthropic/provider");
 const { createModelRegistry } = require("./src/models/model-registry");
 const { createModelRouter, capabilityForIntent } = require("./src/core/model-router");
 const { buildVideoUrls, parseVideoRoute } = require("./src/core/video-route");
@@ -40,7 +41,11 @@ const runtimeGuard = createRuntimeGuard({
 const requestDeadlineMs = parsePositiveInteger(env.AI_REQUEST_DEADLINE_MS, 280_000, 10_000, 1_800_000);
 const responseReserveMs = parsePositiveInteger(env.AI_RESPONSE_RESERVE_MS, 2_000, 500, 30_000);
 const openAiProvider = createOpenAIProvider({ env });
-const providerRegistry = createProviderRegistry([openAiProvider]);
+const anthropicProvider = createAnthropicProvider({ env });
+const providerRegistry = createProviderRegistry([
+  openAiProvider,
+  anthropicProvider
+]);
 const modelRegistry = createModelRegistry({ providerRegistry });
 const modelRouter = createModelRouter({ modelRegistry, providerRegistry });
 
@@ -883,20 +888,35 @@ function readEnvFile() {
   }, {});
 }
 
+function primaryModelFor(capability) {
+  try {
+    return modelRouter.plan({ capability }).primary;
+  } catch {
+    return null;
+  }
+}
+
 function textModel() {
-  return openAiProvider.modelFor("text");
+  return primaryModelFor("text")?.id || openAiProvider.modelFor("text");
 }
 
 function getHealth() {
+  const primaryTextModel = primaryModelFor("text");
+  const primaryTextProvider = primaryTextModel
+    ? providerRegistry.get(primaryTextModel.provider)
+    : null;
+
   return {
     ok: true,
     app: "Mi IA",
     version: "2.0.0",
     textModel: textModel(),
-    imageModel: openAiProvider.modelFor("images"),
-    videoModel: openAiProvider.modelFor("video"),
-    apiKeyConfigured: openAiProvider.isConfigured(),
-    activeProvider: openAiProvider.id,
+    imageModel: primaryModelFor("images")?.id || openAiProvider.modelFor("images"),
+    videoModel: primaryModelFor("video")?.id || openAiProvider.modelFor("video"),
+    apiKeyConfigured: providerRegistry.configured().length > 0,
+    openAiConfigured: openAiProvider.isConfigured(),
+    anthropicConfigured: anthropicProvider.isConfigured(),
+    activeProvider: primaryTextProvider?.id || null,
     providers: providerRegistry.listPublic(),
     modelRegistry: modelRegistry.summary(),
     models: modelRegistry.listPublic(),
@@ -910,8 +930,8 @@ function getHealth() {
     requestPolicy: {
       deadlineMs: requestDeadlineMs,
       responseReserveMs,
-      providerTimeoutMs: openAiProvider.requestPolicy().timeoutMs,
-      providerMaxRetries: openAiProvider.requestPolicy().maxRetries,
+      providerTimeoutMs: primaryTextProvider?.requestPolicy().timeoutMs ?? null,
+      providerMaxRetries: primaryTextProvider?.requestPolicy().maxRetries ?? null,
       providerPolicies: providerRegistry.list().map((provider) => ({
         provider: provider.id,
         ...provider.requestPolicy()
