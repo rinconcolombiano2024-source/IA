@@ -57,7 +57,10 @@ OPENAI_VIDEO_MODEL=sora-2
 
 3. Aplica las variables al entorno **Production** y, si utilizas previews, tambien a **Preview**.
 4. Haz un nuevo deployment despues de guardar las variables.
-5. Abre la URL de Vercel. El navegador debe mostrar el dialogo HTTP Basic Auth. Usa los valores definidos en `APP_AUTH_USER` y `APP_AUTH_PASSWORD`.
+5. Abre la URL de Vercel: la pagina principal y sus recursos son publicos, sin contrasena de administrador.
+6. Comprueba `/api/public-status` sin autenticarte. Las rutas de pago y privadas (`/api/run`, `/api/history`, `/api/health`, `/api/video/*`, `/generated/*`) siguen protegidas con autenticacion temporal de administrador.
+
+**Atencion:** hacer publica la interfaz NO habilita llamadas anonimas a modelos de pago. El registro de usuarios y las cuotas persistentes deben implementarse y probarse antes de liberar el uso de IA a todas las cuentas. La contrasena APP_AUTH_PASSWORD nunca se comparte con visitantes ni se incorpora a la aplicacion cliente.
 
 Si aparece:
 
