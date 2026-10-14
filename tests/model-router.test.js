@@ -134,3 +134,38 @@ test("public routing plans never expose credentials or provider internals", () =
   const snapshot = JSON.stringify(router.publicPlan(router.plan({capability:"text"})));
   assert.equal(snapshot.includes("sk-private"),false);
 });
+
+
+test("routing errors are safe client errors instead of internal 500 failures", () => {
+  const modelRegistry = { findByCapability(){ return []; } };
+  const providerRegistry = { require(){ throw new Error("unused"); } };
+  const router = createModelRouter({modelRegistry,providerRegistry});
+
+  assert.throws(
+    () => router.plan({capability:"text"}),
+    (error) =>
+      error.code === "NO_MODEL_AVAILABLE" &&
+      error.statusCode === 400 &&
+      error.isClientRequestError === true &&
+      typeof error.publicMessage === "string"
+  );
+});
+
+test("invalid manual provider and model identifiers fail as safe client errors", () => {
+  const modelRegistry = { findByCapability(){ return []; } };
+  const providerRegistry = { require(){ throw new Error("unused"); } };
+  const router = createModelRouter({modelRegistry,providerRegistry});
+
+  assert.throws(
+    () => router.plan({capability:"text",preferredProvider:"***"}),
+    (error) =>
+      error.code === "INVALID_PROVIDER_SELECTION" &&
+      error.statusCode === 400 &&
+      error.isClientRequestError === true
+  );
+
+  assert.throws(
+    () => router.plan({capability:"text",preferredModel:""}),
+    (error) => error.code === "NO_MODEL_AVAILABLE"
+  );
+});
