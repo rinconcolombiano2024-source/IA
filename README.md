@@ -40,19 +40,43 @@ npm start
 
 ## Como desplegar en Vercel
 
-1. Sube esta carpeta a tu repositorio.
-2. En Vercel, configura estas variables de entorno:
+1. Sube esta carpeta al repositorio conectado con Vercel.
+2. En **Vercel > Project > Settings > Environment Variables**, configura como minimo:
 
 ```bash
+APP_AUTH_USER=admin
+APP_AUTH_PASSWORD=usa-una-clave-larga-unica-y-segura
+
 OPENAI_API_KEY=tu-clave-real
 OPENAI_TEXT_MODEL=gpt-5.5
 OPENAI_IMAGE_MODEL=gpt-image-2
 OPENAI_VIDEO_MODEL=sora-2
 ```
 
-3. Vuelve a desplegar el proyecto.
+`APP_AUTH_PASSWORD` es obligatoria en produccion. No copies el valor de ejemplo literalmente y nunca guardes la contraseña real en GitHub.
 
-En Vercel, los archivos creados por la IA se guardan temporalmente durante la vida de la funcion. Para produccion real con descargas persistentes, conviene conectar almacenamiento externo como Vercel Blob, S3 o una base de datos.
+3. Aplica las variables al entorno **Production** y, si utilizas previews, tambien a **Preview**.
+4. Haz un nuevo deployment despues de guardar las variables.
+5. Abre la URL de Vercel. El navegador debe mostrar el dialogo HTTP Basic Auth. Usa los valores definidos en `APP_AUTH_USER` y `APP_AUTH_PASSWORD`.
+
+Si aparece:
+
+```json
+{"error":"La aplicacion no tiene configurada la autenticacion.","code":"AUTH_NOT_CONFIGURED"}
+```
+
+la aplicacion esta cerrando el acceso de forma segura porque faltan `APP_AUTH_USER` o `APP_AUTH_PASSWORD` en ese deployment. No desactives la autenticacion para resolverlo: configura ambas variables y vuelve a desplegar.
+
+Para habilitar otros proveedores, agrega sus claves solo en Vercel, nunca en el repositorio:
+
+```bash
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+XAI_API_KEY=
+GROQ_API_KEY=
+```
+
+En Vercel, los archivos creados por la IA se guardan temporalmente durante la vida de la funcion. Para datos importantes utiliza la persistencia externa configurada por el proyecto.
 
 ## Configuracion principal
 
