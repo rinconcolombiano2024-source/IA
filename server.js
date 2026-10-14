@@ -38,9 +38,6 @@ const runtimeGuard = createRuntimeGuard({
 
 const requestDeadlineMs = parsePositiveInteger(env.AI_REQUEST_DEADLINE_MS, 280_000, 10_000, 1_800_000);
 const responseReserveMs = parsePositiveInteger(env.AI_RESPONSE_RESERVE_MS, 2_000, 500, 30_000);
-const openAiTimeoutMs = parsePositiveInteger(env.OPENAI_TIMEOUT_MS, 120_000, 1_000, 1_800_000);
-const openAiMaxRetries = parsePositiveInteger(env.OPENAI_MAX_RETRIES, 2, 0, 5);
-
 const openAiProvider = createOpenAIProvider({ env });
 const providerRegistry = createProviderRegistry([openAiProvider]);
 const modelRegistry = createModelRegistry({ providerRegistry });
@@ -732,7 +729,7 @@ async function diagnoseAndRepair({ provider, modelSelection, prompt, history, ro
   };
 }
 
-async function createTextResponse(provider, input, deadline, retries = openAiMaxRetries) {
+async function createTextResponse(provider, input, deadline, retries) {
   const request = provider.buildTextRequest(input);
   return callProviderJson(
     provider,
@@ -743,7 +740,7 @@ async function createTextResponse(provider, input, deadline, retries = openAiMax
   );
 }
 
-async function createStructuredResponse(provider, input, deadline, retries = openAiMaxRetries) {
+async function createStructuredResponse(provider, input, deadline, retries) {
   const request = provider.buildStructuredRequest(input);
   return callProviderJson(
     provider,
@@ -754,7 +751,7 @@ async function createStructuredResponse(provider, input, deadline, retries = ope
   );
 }
 
-async function callProviderJson(provider, endpointName, payload, deadline, retries = openAiMaxRetries) {
+async function callProviderJson(provider, endpointName, payload, deadline, retries) {
   const response = await fetchProviderWithRetry(
     provider,
     provider.endpoint(endpointName),
@@ -774,12 +771,19 @@ async function callProviderJson(provider, endpointName, payload, deadline, retri
   return data;
 }
 
-async function fetchProviderWithRetry(provider, url, options, deadline, retries = openAiMaxRetries) {
+async function fetchProviderWithRetry(provider, url, options, deadline, retries) {
   let lastError;
-  const maxRetries = parsePositiveInteger(retries, openAiMaxRetries, 0, 5);
+  const policy = provider.requestPolicy();
+  const maxRetries = parsePositiveInteger(
+    retries,
+    policy.maxRetries,
+    0,
+    5
+  );
 
   for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-    const attemptTimeoutMs = deadline?.attemptTimeoutMs(openAiTimeoutMs) ?? openAiTimeoutMs;
+    const attemptTimeoutMs =
+      deadline?.attemptTimeoutMs(policy.timeoutMs) ?? policy.timeoutMs;
 
     if (attemptTimeoutMs < 1_000) {
       throw createDeadlineError();
@@ -882,8 +886,12 @@ function getHealth() {
     requestPolicy: {
       deadlineMs: requestDeadlineMs,
       responseReserveMs,
-      providerTimeoutMs: openAiTimeoutMs,
-      providerMaxRetries: openAiMaxRetries
+      providerTimeoutMs: openAiProvider.requestPolicy().timeoutMs,
+      providerMaxRetries: openAiProvider.requestPolicy().maxRetries,
+      providerPolicies: providerRegistry.list().map((provider) => ({
+        provider: provider.id,
+        ...provider.requestPolicy()
+      }))
     },
     stateStore: stateStore.summary(),
     capabilities: [
