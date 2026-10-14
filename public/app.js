@@ -43,7 +43,7 @@ form.addEventListener("submit", async (event) => {
   try {
     const response = await fetch("/api/run", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify({ prompt, mode, format: formatSelect.value })
     });
 
@@ -51,6 +51,10 @@ form.addEventListener("submit", async (event) => {
     loadingMessage.remove();
 
     if (!response.ok) {
+      if (response.status === 401 || response.status === 503 && data.code === "AUTH_NOT_CONFIGURED") {
+        addMessage("ai", "IA está abierta al público, pero el uso de modelos todavía requiere una cuenta autorizada.", "El registro individual se habilitará antes del lanzamiento público de las funciones de pago.");
+        return;
+      }
       addMessage("ai", data.error || "No pude completar la peticion.", data.detail || data.recovery);
       return;
     }
@@ -66,12 +70,15 @@ form.addEventListener("submit", async (event) => {
 
 async function checkHealth() {
   try {
-    const response = await fetch("/api/health");
+    const response = await fetch("/api/public-status", { headers: { "Accept": "application/json" } });
+    if (!response.ok) throw new Error("No se pudo comprobar el estado.");
     const data = await response.json();
-    healthDot.classList.toggle("is-ok", data.ok && data.apiKeyConfigured);
-    healthDot.classList.toggle("is-warn", data.ok && !data.apiKeyConfigured);
-    healthText.textContent = data.apiKeyConfigured ? "Sistema listo" : "Falta clave API";
-    modelText.textContent = `${data.textModel} · ${data.imageModel} · ${data.videoModel}`;
+    healthDot.classList.toggle("is-ok", data.ok);
+    healthDot.classList.toggle("is-warn", !data.ok);
+    healthText.textContent = data.ok ? "IA pública" : "Servicio no disponible";
+    modelText.textContent = data.requiresAuthenticationForGeneration
+      ? "Generación protegida; cuentas públicas pendientes"
+      : "Sistema disponible";
   } catch {
     healthDot.classList.add("is-warn");
     healthText.textContent = "Servidor apagado";
