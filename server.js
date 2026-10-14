@@ -15,6 +15,7 @@ const { createOpenAIProvider } = require("./src/providers/openai/provider");
 const { createAnthropicProvider } = require("./src/providers/anthropic/provider");
 const { createGeminiProvider } = require("./src/providers/gemini/provider");
 const { createXaiProvider } = require("./src/providers/xai/provider");
+const { createGroqProvider } = require("./src/providers/groq/provider");
 const { createModelRegistry } = require("./src/models/model-registry");
 const { createModelRouter, capabilityForIntent } = require("./src/core/model-router");
 const { buildVideoUrls, parseVideoRoute } = require("./src/core/video-route");
@@ -46,11 +47,13 @@ const openAiProvider = createOpenAIProvider({ env });
 const anthropicProvider = createAnthropicProvider({ env });
 const geminiProvider = createGeminiProvider({ env });
 const xaiProvider = createXaiProvider({ env });
+const groqProvider = createGroqProvider({ env });
 const providerRegistry = createProviderRegistry([
   openAiProvider,
   anthropicProvider,
   geminiProvider,
-  xaiProvider
+  xaiProvider,
+  groqProvider
 ]);
 const modelRegistry = createModelRegistry({ providerRegistry });
 const modelRouter = createModelRouter({ modelRegistry, providerRegistry });
@@ -933,6 +936,7 @@ function getHealth() {
     anthropicConfigured: anthropicProvider.isConfigured(),
     geminiConfigured: geminiProvider.isConfigured(),
     xaiConfigured: xaiProvider.isConfigured(),
+    groqConfigured: groqProvider.isConfigured(),
     activeProvider: primaryTextProvider?.id || null,
     providers: providerRegistry.listPublic(),
     modelRegistry: modelRegistry.summary(),
