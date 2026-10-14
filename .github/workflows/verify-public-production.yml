@@ -1,0 +1,33 @@
+name: Verify public IA production access
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-public-access
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify live production access and paid API authorization
+        env:
+          IA_PUBLIC_URL: https://rinconcolombianoia.vercel.app
+        run: node scripts/check-public-production.mjs
