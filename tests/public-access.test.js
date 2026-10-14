@@ -20,7 +20,7 @@ test("only explicitly public read routes bypass authentication", () => {
     assert.equal(isPublicRequest("GET", resource), false, resource);
   }
 
-  for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+  for (const method of ["HEAD", "POST", "PUT", "PATCH", "DELETE"]) {
     assert.equal(isPublicRequest(method, "/"), false, method);
     assert.equal(isPublicRequest(method, "/api/public-status"), false, method);
   }
