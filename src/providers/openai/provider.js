@@ -49,6 +49,58 @@ function createOpenAIProvider(options = {}) {
   }
   function credential(name = "apiKey") { return name === "apiKey" ? apiKey : ""; }
 
+  function listModels() {
+    const available = isConfigured();
+    const descriptors = new Map();
+
+    function add(modelId, capabilities, modalities, priority) {
+      const key = String(modelId);
+      const current = descriptors.get(key);
+
+      if (current) {
+        for (const capability of capabilities) {
+          if (!current.capabilities.includes(capability)) {
+            current.capabilities.push(capability);
+          }
+        }
+        for (const modality of modalities) {
+          if (!current.modalities.includes(modality)) {
+            current.modalities.push(modality);
+          }
+        }
+        current.priority = Math.min(current.priority, priority);
+        return;
+      }
+
+      descriptors.set(key, {
+        id: modelId,
+        provider: "openai",
+        capabilities: [...capabilities],
+        modalities: [...modalities],
+        status: available ? "available" : "unconfigured",
+        priority,
+        contextWindow: null,
+        inputCostPerMillion: null,
+        outputCostPerMillion: null,
+        qualityScore: null,
+        latencyMs: null,
+        errorRate: null,
+        available,
+        toolCompatible: capabilities.includes("tools"),
+        source: "configured",
+        metadata: {
+          discovered: false
+        }
+      });
+    }
+
+    add(models.text, ["text","reasoning","code","structured_json"], ["text"], 10);
+    add(models.image, ["images"], ["image"], 20);
+    add(models.video, ["video"], ["video"], 30);
+
+    return Array.from(descriptors.values());
+  }
+
   function endpoint(name, params = {}) {
     const key = String(name || "").trim().toLowerCase();
     if (key === "responses") return `${baseUrl}/responses`;
@@ -117,6 +169,7 @@ function createOpenAIProvider(options = {}) {
     isConfigured,
     supports,
     modelFor,
+    listModels,
     credential,
     endpoint,
     authHeaders,
