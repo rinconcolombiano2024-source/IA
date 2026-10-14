@@ -13,6 +13,7 @@ const { createStateStore } = require("./src/storage/state-store");
 const { createProviderRegistry } = require("./src/providers/registry");
 const { createOpenAIProvider } = require("./src/providers/openai/provider");
 const { createModelRegistry } = require("./src/models/model-registry");
+const { createModelRouter, capabilityForIntent } = require("./src/core/model-router");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
@@ -42,6 +43,7 @@ const openAiMaxRetries = parsePositiveInteger(env.OPENAI_MAX_RETRIES, 2, 0, 5);
 const openAiProvider = createOpenAIProvider({ env });
 const providerRegistry = createProviderRegistry([openAiProvider]);
 const modelRegistry = createModelRegistry({ providerRegistry });
+const modelRouter = createModelRouter({ modelRegistry, providerRegistry });
 
 const stateStore = createStateStore({
   mode: env.AI_STATE_STORE,
@@ -152,21 +154,12 @@ server.listen(port, () => {
 });
 
 async function handleRun(req, res, requestId, deadline) {
-  const provider = providerRegistry.require("openai");
-
-  if (!provider.isConfigured()) {
-    sendJson(res, 400, {
-      error: "El proveedor OpenAI no esta configurado. Define OPENAI_API_KEY en el entorno.",
-      code: "PROVIDER_NOT_CONFIGURED",
-      provider: provider.id
-    });
-    return;
-  }
-
   const body = await readJsonBody(req, { limitBytes: requestLimit });
   const prompt = String(body.prompt || "").trim();
   const requestedMode = String(body.mode || "auto").toLowerCase();
   const format = String(body.format || "bundle").toLowerCase();
+  const preferredProvider = String(body.provider || "").trim().toLowerCase();
+  const preferredModel = String(body.model || "").trim();
 
   if (!prompt) {
     sendJson(res, 400, { error: "Escribe una peticion para la IA." });
@@ -185,19 +178,54 @@ async function handleRun(req, res, requestId, deadline) {
   }
 
   const history = await loadHistoryForContext(12);
+
+  let classifierPlan;
+  try {
+    classifierPlan = modelRouter.plan({
+      capability: "structured_json"
+    });
+  } catch {
+    classifierPlan = modelRouter.plan({
+      capability: "text"
+    });
+  }
+
+  const classifierProvider = modelRouter.providerFor(classifierPlan.primary);
   const route =
     requestedMode === "auto"
-      ? await classifyIntent(provider, prompt, deadline).catch((error) => {
+      ? await classifyIntent(
+          classifierProvider,
+          classifierPlan.primary.id,
+          prompt,
+          deadline
+        ).catch((error) => {
           if (error?.code === "REQUEST_DEADLINE_EXCEEDED") throw error;
           return inferIntent(prompt);
         })
       : modeToRoute(requestedMode, prompt);
 
+  const executionPlan = modelRouter.plan({
+    capability: capabilityForIntent(route.intent),
+    preferredProvider,
+    preferredModel
+  });
+  const provider = modelRouter.providerFor(executionPlan.primary);
   const job = createJob(route.intent);
   let result;
 
   try {
-    result = await runTask({ provider, prompt, format, route, job, history, deadline });
+    result = await runTask({
+      provider,
+      modelSelection: executionPlan.primary,
+      prompt,
+      format,
+      route,
+      job,
+      history,
+      deadline
+    });
+
+    result.routing = modelRouter.publicPlan(executionPlan);
     await recordHistory({
       id: job.id,
       at: new Date().toISOString(),
@@ -243,9 +271,9 @@ async function runTask(context) {
   return generateText(context);
 }
 
-async function classifyIntent(provider, prompt, deadline) {
+async function classifyIntent(provider, modelId, prompt, deadline) {
   const data = await createResponse(provider, {
-    model: textModel(),
+    model: modelId,
     reasoning: { effort: env.OPENAI_ROUTER_REASONING || "low" },
     instructions:
       "Clasifica la peticion del usuario para una plataforma de IA. Responde solo JSON valido.",
@@ -329,9 +357,9 @@ function inferIntent(prompt) {
   return { intent: "text", title: makeTitle(prompt), format: "text", language: "es", confidence: 0.5, notes: "" };
 }
 
-async function generateText({ provider, prompt, history, route, deadline }) {
+async function generateText({ provider, modelSelection, prompt, history, route, deadline }) {
   const data = await createResponse(provider, {
-    model: textModel(),
+    model: modelSelection.id,
     reasoning: { effort: env.OPENAI_REASONING_EFFORT || "medium" },
     instructions: [
       "Eres una IA generalista avanzada para usuarios finales.",
@@ -352,10 +380,10 @@ async function generateText({ provider, prompt, history, route, deadline }) {
 }
 
 async function generateDocument(context, kind) {
-  const { provider, prompt, job, route, format, deadline } = context;
+  const { provider, modelSelection, prompt, job, route, format, deadline } = context;
   const instructions = documentInstructions(kind);
   const data = await createResponse(provider, {
-    model: textModel(),
+    model: modelSelection.id,
     reasoning: { effort: env.OPENAI_REASONING_EFFORT || "medium" },
     instructions,
     input: prompt
@@ -443,7 +471,7 @@ function documentInstructions(kind) {
 }
 
 async function generateCodePackage(context, kind) {
-  const { provider, prompt, job, route, deadline } = context;
+  const { provider, modelSelection, prompt, job, route, deadline } = context;
   const schema = {
     type: "object",
     additionalProperties: false,
@@ -471,7 +499,7 @@ async function generateCodePackage(context, kind) {
   };
 
   const data = await createResponse(provider, {
-    model: provider.modelFor("code"),
+    model: modelSelection.id,
     reasoning: { effort: env.OPENAI_REASONING_EFFORT || "medium" },
     instructions: codeInstructions(kind),
     input: prompt,
@@ -554,8 +582,8 @@ function codeInstructions(kind) {
   return base.join("\n");
 }
 
-async function generateImage({ provider, prompt, job, route, deadline }) {
-  const model = provider.modelFor("images");
+async function generateImage({ provider, modelSelection, prompt, job, route, deadline }) {
+  const model = modelSelection.id;
   const data = await callProviderJson(provider, "images", {
     model,
     prompt,
@@ -586,8 +614,8 @@ async function generateImage({ provider, prompt, job, route, deadline }) {
   };
 }
 
-async function generateVideo({ provider, prompt, route, deadline }) {
-  const model = provider.modelFor("video");
+async function generateVideo({ provider, modelSelection, prompt, route, deadline }) {
+  const model = modelSelection.id;
   const form = new FormData();
   form.append("model", model);
   form.append("prompt", prompt);
@@ -672,9 +700,9 @@ async function handleVideoRoute(pathname, res, deadline) {
   sendJson(res, response.status, data);
 }
 
-async function diagnoseAndRepair({ provider, prompt, history, route, deadline }) {
+async function diagnoseAndRepair({ provider, modelSelection, prompt, history, route, deadline }) {
   const data = await createResponse(provider, {
-    model: textModel(),
+    model: modelSelection.id,
     reasoning: { effort: env.OPENAI_REASONING_EFFORT || "medium" },
     instructions: [
       "Actua como diagnostico tecnico y estratega de reparacion.",
@@ -828,6 +856,12 @@ function getHealth() {
     providers: providerRegistry.listPublic(),
     modelRegistry: modelRegistry.summary(),
     models: modelRegistry.listPublic(),
+    routing: {
+      strategy: "deterministic_capability_rank",
+      supportsManualProvider: true,
+      supportsManualModel: true,
+      fallbackSlots: 2
+    },
     runtimeProtection: runtimeGuard.snapshot(),
     requestPolicy: {
       deadlineMs: requestDeadlineMs,
