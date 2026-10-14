@@ -12,6 +12,7 @@ const {
 const { createStateStore } = require("./src/storage/state-store");
 const { createProviderRegistry } = require("./src/providers/registry");
 const { createOpenAIProvider } = require("./src/providers/openai/provider");
+const { createModelRegistry } = require("./src/models/model-registry");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
@@ -40,6 +41,7 @@ const openAiMaxRetries = parsePositiveInteger(env.OPENAI_MAX_RETRIES, 2, 0, 5);
 
 const openAiProvider = createOpenAIProvider({ env });
 const providerRegistry = createProviderRegistry([openAiProvider]);
+const modelRegistry = createModelRegistry({ providerRegistry });
 
 const stateStore = createStateStore({
   mode: env.AI_STATE_STORE,
@@ -824,6 +826,8 @@ function getHealth() {
     apiKeyConfigured: openAiProvider.isConfigured(),
     activeProvider: openAiProvider.id,
     providers: providerRegistry.listPublic(),
+    modelRegistry: modelRegistry.summary(),
+    models: modelRegistry.listPublic(),
     runtimeProtection: runtimeGuard.snapshot(),
     requestPolicy: {
       deadlineMs: requestDeadlineMs,
