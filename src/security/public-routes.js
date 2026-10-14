@@ -13,7 +13,7 @@ const publicAssets = new Set([
 ]);
 
 function isPublicRequest(method, pathname) {
-  if (method !== "GET" && method !== "HEAD") return false;
+  if (method !== "GET") return false;
   if (pathname === "/api/public-status") return true;
   return publicAssets.has(pathname);
 }
