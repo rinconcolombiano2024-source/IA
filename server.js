@@ -17,6 +17,7 @@ const { createGeminiProvider } = require("./src/providers/gemini/provider");
 const { createXaiProvider } = require("./src/providers/xai/provider");
 const { createGroqProvider } = require("./src/providers/groq/provider");
 const { createModelRegistry } = require("./src/models/model-registry");
+const { createModelDiscovery } = require("./src/models/model-discovery");
 const { createModelRouter, capabilityForIntent } = require("./src/core/model-router");
 const { buildVideoUrls, parseVideoRoute } = require("./src/core/video-route");
 const { executeWithFallback } = require("./src/core/fallback-executor");
@@ -57,6 +58,13 @@ const providerRegistry = createProviderRegistry([
   groqProvider
 ]);
 const modelRegistry = createModelRegistry({ providerRegistry });
+const modelDiscovery = createModelDiscovery({
+  providerRegistry,
+  modelRegistry,
+  enabled: env.AI_MODEL_DISCOVERY_ENABLED,
+  intervalMs: env.AI_MODEL_DISCOVERY_INTERVAL_MS,
+  timeoutMs: env.AI_MODEL_DISCOVERY_TIMEOUT_MS
+});
 const providerHealth = createProviderHealth({
   failureThreshold: env.AI_PROVIDER_FAILURE_THRESHOLD,
   openMs: env.AI_PROVIDER_CIRCUIT_OPEN_MS,
@@ -200,6 +208,7 @@ async function handleRun(req, res, requestId, deadline) {
     return;
   }
 
+  await modelDiscovery.refreshIfDue();
   const history = await loadHistoryForContext(12);
 
   let classifierPlan;
@@ -1022,6 +1031,7 @@ function getHealth() {
       providerRegistry.list().map((provider) => provider.id)
     ),
     modelRegistry: modelRegistry.summary(),
+    modelDiscovery: modelDiscovery.summary(),
     models: modelRegistry.listPublic(),
     routing: {
       strategy: "deterministic_capability_rank",
