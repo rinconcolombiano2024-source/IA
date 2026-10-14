@@ -203,19 +203,57 @@ async function handleRun(req, res, requestId, deadline) {
     });
   }
 
-  const classifierProvider = modelRouter.providerFor(classifierPlan.primary);
-  const route =
-    requestedMode === "auto"
-      ? await classifyIntent(
-          classifierProvider,
-          classifierPlan.primary.id,
-          prompt,
-          deadline
-        ).catch((error) => {
-          if (error?.code === "REQUEST_DEADLINE_EXCEEDED") throw error;
-          return inferIntent(prompt);
-        })
-      : modeToRoute(requestedMode, prompt);
+  let classifierRouting = {
+    source: requestedMode === "auto" ? "local_inference" : "manual_mode",
+    selected: null,
+    fallbackUsed: false,
+    attempts: []
+  };
+
+  let route;
+
+  if (requestedMode === "auto") {
+    try {
+      const classification = await executeWithFallback({
+        plan: classifierPlan,
+        intent: "router",
+        providerFor: (selection) => modelRouter.providerFor(selection),
+        deadline,
+        execute: async ({ provider, selection }) =>
+          classifyIntent(
+            provider,
+            selection.id,
+            prompt,
+            deadline
+          )
+      });
+
+      route = classification.result;
+      classifierRouting = {
+        source: "model",
+        selected: {
+          provider: classification.selection.provider,
+          model: classification.selection.id
+        },
+        fallbackUsed: classification.fallbackUsed,
+        attempts: classification.attempts
+      };
+    } catch (error) {
+      if (error?.code === "REQUEST_DEADLINE_EXCEEDED") throw error;
+
+      route = inferIntent(prompt);
+      classifierRouting = {
+        source: "local_inference",
+        selected: null,
+        fallbackUsed: false,
+        attempts: Array.isArray(error?.routingAttempts)
+          ? error.routingAttempts
+          : []
+      };
+    }
+  } else {
+    route = modeToRoute(requestedMode, prompt);
+  }
 
   const executionPlan = modelRouter.plan({
     capability: capabilityForIntent(route.intent),
@@ -252,7 +290,8 @@ async function handleRun(req, res, requestId, deadline) {
         model: execution.selection.id
       },
       fallbackUsed: execution.fallbackUsed,
-      attempts: execution.attempts
+      attempts: execution.attempts,
+      classification: classifierRouting
     };
     await recordHistory({
       id: job.id,
@@ -337,7 +376,16 @@ async function classifyIntent(provider, modelId, prompt, deadline) {
     schema
   }, deadline, 0);
 
-  return safeJsonParse(provider.extractText(data)) || inferIntent(prompt);
+  const parsed = safeJsonParse(provider.extractText(data));
+
+  if (!parsed) {
+    const error = new Error("El proveedor no devolvio una clasificacion estructurada valida.");
+    error.code = "PROVIDER_INVALID_RESPONSE";
+    error.provider = provider.id;
+    throw error;
+  }
+
+  return parsed;
 }
 
 function modeToRoute(mode, prompt) {
