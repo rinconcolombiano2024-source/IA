@@ -14,6 +14,7 @@ const { createProviderRegistry } = require("./src/providers/registry");
 const { createOpenAIProvider } = require("./src/providers/openai/provider");
 const { createModelRegistry } = require("./src/models/model-registry");
 const { createModelRouter, capabilityForIntent } = require("./src/core/model-router");
+const { buildVideoUrls, parseVideoRoute } = require("./src/core/video-route");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
@@ -635,39 +636,58 @@ async function generateVideo({ provider, modelSelection, prompt, route, deadline
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(provider.errorMessage(data));
 
+  const videoUrls = buildVideoUrls(provider.id, data.id);
+
   return {
     type: "video",
     title: route.title || "Video generado",
     text: "La generacion de video se inicio. La app puede consultar el estado hasta que este listo.",
     video: {
       id: data.id,
+      provider: provider.id,
       status: data.status || "queued",
-      statusUrl: data.id ? `/api/video/${encodeURIComponent(data.id)}/status` : "",
-      contentUrl: data.id ? `/api/video/${encodeURIComponent(data.id)}/content` : ""
+      statusUrl: videoUrls.statusUrl,
+      contentUrl: videoUrls.contentUrl
     },
     files: []
   };
 }
 
 async function handleVideoRoute(pathname, res, deadline) {
-  const provider = providerRegistry.require("openai");
+  const routeInfo = parseVideoRoute(pathname);
 
-  if (!provider.isConfigured()) {
+  if (!routeInfo.valid) {
     sendJson(res, 400, {
-      error: "El proveedor OpenAI no esta configurado.",
-      code: "PROVIDER_NOT_CONFIGURED",
-      provider: provider.id
+      error: "La ruta de video no es valida.",
+      code: "INVALID_VIDEO_ROUTE"
     });
     return;
   }
 
-  const parts = pathname.split("/").filter(Boolean);
-  const videoId = parts[2];
-  const action = parts[3] || "status";
-  if (!videoId) {
-    sendJson(res, 400, { error: "Falta el id del video." });
-    return;
+  let provider;
+
+  if (routeInfo.legacy) {
+    const legacyPlan = modelRouter.plan({ capability: "video" });
+    provider = modelRouter.providerFor(legacyPlan.primary);
+  } else {
+    try {
+      provider = providerRegistry.get(routeInfo.providerId);
+    } catch {
+      provider = null;
+    }
+
+    if (!provider || !provider.isConfigured() || !provider.supports("video")) {
+      sendJson(res, 400, {
+        error: "El proveedor de video solicitado no esta disponible.",
+        code: "VIDEO_PROVIDER_UNAVAILABLE",
+        provider: routeInfo.providerId
+      });
+      return;
+    }
   }
+
+  const videoId = routeInfo.videoId;
+  const action = routeInfo.action;
 
   if (action === "content") {
     const response = await fetchProviderWithRetry(
