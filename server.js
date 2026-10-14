@@ -13,6 +13,7 @@ const { createStateStore } = require("./src/storage/state-store");
 const { createProviderRegistry } = require("./src/providers/registry");
 const { createOpenAIProvider } = require("./src/providers/openai/provider");
 const { createAnthropicProvider } = require("./src/providers/anthropic/provider");
+const { createGeminiProvider } = require("./src/providers/gemini/provider");
 const { createModelRegistry } = require("./src/models/model-registry");
 const { createModelRouter, capabilityForIntent } = require("./src/core/model-router");
 const { buildVideoUrls, parseVideoRoute } = require("./src/core/video-route");
@@ -42,9 +43,11 @@ const requestDeadlineMs = parsePositiveInteger(env.AI_REQUEST_DEADLINE_MS, 280_0
 const responseReserveMs = parsePositiveInteger(env.AI_RESPONSE_RESERVE_MS, 2_000, 500, 30_000);
 const openAiProvider = createOpenAIProvider({ env });
 const anthropicProvider = createAnthropicProvider({ env });
+const geminiProvider = createGeminiProvider({ env });
 const providerRegistry = createProviderRegistry([
   openAiProvider,
-  anthropicProvider
+  anthropicProvider,
+  geminiProvider
 ]);
 const modelRegistry = createModelRegistry({ providerRegistry });
 const modelRouter = createModelRouter({ modelRegistry, providerRegistry });
@@ -757,7 +760,8 @@ async function createTextResponse(provider, input, deadline, retries) {
     request.endpointName,
     request.payload,
     deadline,
-    retries
+    retries,
+    request.endpointParams
   );
 }
 
@@ -768,14 +772,22 @@ async function createStructuredResponse(provider, input, deadline, retries) {
     request.endpointName,
     request.payload,
     deadline,
-    retries
+    retries,
+    request.endpointParams
   );
 }
 
-async function callProviderJson(provider, endpointName, payload, deadline, retries) {
+async function callProviderJson(
+  provider,
+  endpointName,
+  payload,
+  deadline,
+  retries,
+  endpointParams = {}
+) {
   const response = await fetchProviderWithRetry(
     provider,
-    provider.endpoint(endpointName),
+    provider.endpoint(endpointName, endpointParams),
     {
       method: "POST",
       headers: provider.authHeaders({
@@ -916,6 +928,7 @@ function getHealth() {
     apiKeyConfigured: providerRegistry.configured().length > 0,
     openAiConfigured: openAiProvider.isConfigured(),
     anthropicConfigured: anthropicProvider.isConfigured(),
+    geminiConfigured: geminiProvider.isConfigured(),
     activeProvider: primaryTextProvider?.id || null,
     providers: providerRegistry.listPublic(),
     modelRegistry: modelRegistry.summary(),
