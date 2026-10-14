@@ -26,7 +26,7 @@ function assertProviderAdapter(provider) {
   const id = normalizeProviderId(provider.id);
   const requiredMethods = [
     "isConfigured","supports","modelFor","listModels","credential","endpoint","authHeaders",
-    "buildTextRequest","buildStructuredRequest","extractText",
+    "buildTextRequest","buildStructuredRequest","extractText","requestPolicy",
     "retryDecision","networkRetryDelay","errorMessage","publicSummary"
   ];
   for (const method of requiredMethods) {
