@@ -49,6 +49,65 @@ function createOpenAIProvider(options = {}) {
   }
   function credential(name = "apiKey") { return name === "apiKey" ? apiKey : ""; }
 
+  function reasoningEffortFor(purpose) {
+    return String(
+      purpose === "router"
+        ? env.OPENAI_ROUTER_REASONING || "low"
+        : env.OPENAI_REASONING_EFFORT || "medium"
+    ).trim() || "medium";
+  }
+
+  function buildTextRequest(input = {}) {
+    return {
+      endpointName: "responses",
+      payload: {
+        model: normalizeModel(input.model, models.text),
+        reasoning: { effort: reasoningEffortFor(input.purpose) },
+        instructions: String(input.instructions || ""),
+        input: String(input.input || "")
+      }
+    };
+  }
+
+  function buildStructuredRequest(input = {}) {
+    const schemaName = String(input.schemaName || "structured_output").trim();
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(schemaName)) {
+      throw new Error("Invalid structured output schema name.");
+    }
+    if (!input.schema || typeof input.schema !== "object") {
+      throw new Error("Structured output requires a JSON schema.");
+    }
+
+    const request = buildTextRequest(input);
+    request.payload.text = {
+      format: {
+        type: "json_schema",
+        name: schemaName,
+        strict: input.strict !== false,
+        schema: input.schema
+      }
+    };
+    return request;
+  }
+
+  function extractText(data) {
+    if (typeof data?.output_text === "string") {
+      return data.output_text.trim();
+    }
+    if (!Array.isArray(data?.output)) return "";
+
+    return data.output
+      .flatMap((item) => (Array.isArray(item.content) ? item.content : []))
+      .map((content) => {
+        if (typeof content.text === "string") return content.text;
+        if (typeof content.output_text === "string") return content.output_text;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n")
+      .trim();
+  }
+
   function listModels() {
     const available = isConfigured();
     const descriptors = new Map();
@@ -173,6 +232,9 @@ function createOpenAIProvider(options = {}) {
     credential,
     endpoint,
     authHeaders,
+    buildTextRequest,
+    buildStructuredRequest,
+    extractText,
     retryDecision,
     networkRetryDelay,
     errorMessage,

@@ -272,18 +272,7 @@ async function runTask(context) {
 }
 
 async function classifyIntent(provider, modelId, prompt, deadline) {
-  const data = await createResponse(provider, {
-    model: modelId,
-    reasoning: { effort: env.OPENAI_ROUTER_REASONING || "low" },
-    instructions:
-      "Clasifica la peticion del usuario para una plataforma de IA. Responde solo JSON valido.",
-    input: prompt,
-    text: {
-      format: {
-        type: "json_schema",
-        name: "task_router",
-        strict: true,
-        schema: {
+  const schema = {
           type: "object",
           additionalProperties: false,
           properties: {
@@ -308,12 +297,19 @@ async function classifyIntent(provider, modelId, prompt, deadline) {
             notes: { type: "string" }
           },
           required: ["intent", "title", "format", "language", "confidence", "notes"]
-        }
-      }
-    }
+        };
+
+  const data = await createStructuredResponse(provider, {
+    model: modelId,
+    purpose: "router",
+    instructions:
+      "Clasifica la peticion del usuario para una plataforma de IA. Responde solo JSON valido.",
+    input: prompt,
+    schemaName: "task_router",
+    schema
   }, deadline, 0);
 
-  return safeJsonParse(extractResponseText(data)) || inferIntent(prompt);
+  return safeJsonParse(provider.extractText(data)) || inferIntent(prompt);
 }
 
 function modeToRoute(mode, prompt) {
@@ -358,9 +354,9 @@ function inferIntent(prompt) {
 }
 
 async function generateText({ provider, modelSelection, prompt, history, route, deadline }) {
-  const data = await createResponse(provider, {
+  const data = await createTextResponse(provider, {
     model: modelSelection.id,
-    reasoning: { effort: env.OPENAI_REASONING_EFFORT || "medium" },
+    purpose: "general",
     instructions: [
       "Eres una IA generalista avanzada para usuarios finales.",
       "Ayudas a escribir, planificar, analizar, crear, programar y resolver problemas.",
@@ -374,7 +370,7 @@ async function generateText({ provider, modelSelection, prompt, history, route, 
   return {
     type: "text",
     title: route.title || "Respuesta",
-    text: extractResponseText(data) || "La IA respondio, pero no envio texto legible.",
+    text: provider.extractText(data) || "La IA respondio, pero no envio texto legible.",
     files: []
   };
 }
@@ -382,14 +378,14 @@ async function generateText({ provider, modelSelection, prompt, history, route, 
 async function generateDocument(context, kind) {
   const { provider, modelSelection, prompt, job, route, format, deadline } = context;
   const instructions = documentInstructions(kind);
-  const data = await createResponse(provider, {
+  const data = await createTextResponse(provider, {
     model: modelSelection.id,
-    reasoning: { effort: env.OPENAI_REASONING_EFFORT || "medium" },
+    purpose: "document",
     instructions,
     input: prompt
   }, deadline);
 
-  const markdown = normalizeMarkdown(extractResponseText(data), route.title || makeTitle(prompt));
+  const markdown = normalizeMarkdown(provider.extractText(data), route.title || makeTitle(prompt));
   const title = extractMarkdownTitle(markdown) || route.title || makeTitle(prompt);
   const plainText = markdownToPlainText(markdown);
   const html = markdownToHtml(markdown, title);
@@ -498,22 +494,16 @@ async function generateCodePackage(context, kind) {
     required: ["projectName", "summary", "runInstructions", "files"]
   };
 
-  const data = await createResponse(provider, {
+  const data = await createStructuredResponse(provider, {
     model: modelSelection.id,
-    reasoning: { effort: env.OPENAI_REASONING_EFFORT || "medium" },
+    purpose: "code",
     instructions: codeInstructions(kind),
     input: prompt,
-    text: {
-      format: {
-        type: "json_schema",
-        name: "project_files",
-        strict: true,
-        schema
-      }
-    }
+    schemaName: "project_files",
+    schema
   }, deadline);
 
-  const parsed = safeJsonParse(extractResponseText(data));
+  const parsed = safeJsonParse(provider.extractText(data));
   if (!parsed || !Array.isArray(parsed.files)) {
     throw new Error("La IA no devolvio un paquete de codigo valido.");
   }
@@ -701,9 +691,9 @@ async function handleVideoRoute(pathname, res, deadline) {
 }
 
 async function diagnoseAndRepair({ provider, modelSelection, prompt, history, route, deadline }) {
-  const data = await createResponse(provider, {
+  const data = await createTextResponse(provider, {
     model: modelSelection.id,
-    reasoning: { effort: env.OPENAI_REASONING_EFFORT || "medium" },
+    purpose: "repair",
     instructions: [
       "Actua como diagnostico tecnico y estratega de reparacion.",
       "No digas que puedes repararte con conciencia propia.",
@@ -717,13 +707,31 @@ async function diagnoseAndRepair({ provider, modelSelection, prompt, history, ro
   return {
     type: "repair",
     title: route.title || "Diagnostico",
-    text: extractResponseText(data),
+    text: provider.extractText(data),
     files: []
   };
 }
 
-async function createResponse(provider, payload, deadline, retries = openAiMaxRetries) {
-  return callProviderJson(provider, "responses", payload, deadline, retries);
+async function createTextResponse(provider, input, deadline, retries = openAiMaxRetries) {
+  const request = provider.buildTextRequest(input);
+  return callProviderJson(
+    provider,
+    request.endpointName,
+    request.payload,
+    deadline,
+    retries
+  );
+}
+
+async function createStructuredResponse(provider, input, deadline, retries = openAiMaxRetries) {
+  const request = provider.buildStructuredRequest(input);
+  return callProviderJson(
+    provider,
+    request.endpointName,
+    request.payload,
+    deadline,
+    retries
+  );
 }
 
 async function callProviderJson(provider, endpointName, payload, deadline, retries = openAiMaxRetries) {
@@ -807,18 +815,6 @@ async function fetchProviderWithRetry(provider, url, options, deadline, retries 
   }
 
   throw lastError || new Error(`No se pudo conectar con ${provider.name || provider.id || "el proveedor de IA"}.`);
-}
-
-function extractResponseText(data) {
-  if (typeof data.output_text === "string") return data.output_text.trim();
-  if (!Array.isArray(data.output)) return "";
-
-  return data.output
-    .flatMap((item) => item.content || [])
-    .map((content) => content.text || content.output_text || "")
-    .filter(Boolean)
-    .join("\n")
-    .trim();
 }
 
 function readEnvFile() {
