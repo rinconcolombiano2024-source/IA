@@ -78,6 +78,33 @@ function createModelRegistry(options = {}) {
     return registered;
   }
 
+  function replaceProviderModels(providerId, descriptors) {
+    const normalizedProvider = normalizeProviderId(providerId);
+    const staged = new Map();
+
+    for (const descriptor of Array.isArray(descriptors) ? descriptors : []) {
+      const model = normalizeModelDescriptor(descriptor);
+      if (model.provider !== normalizedProvider) {
+        throw new Error(
+          `Model provider mismatch: expected ${normalizedProvider}, got ${model.provider}.`
+        );
+      }
+      staged.set(model.key, model);
+    }
+
+    for (const key of Array.from(models.keys())) {
+      if (key.startsWith(`${normalizedProvider}:`)) {
+        models.delete(key);
+      }
+    }
+
+    for (const [key, model] of staged) {
+      models.set(key, model);
+    }
+
+    return Array.from(staged.values());
+  }
+
   function get(providerId, modelId) {
     const key = `${normalizeProviderId(providerId)}:${normalizeModelId(modelId)}`;
     return models.get(key) || null;
@@ -111,13 +138,7 @@ function createModelRegistry(options = {}) {
     }
 
     const providerId = normalizeProviderId(provider.id);
-    for (const key of Array.from(models.keys())) {
-      if (key.startsWith(`${providerId}:`)) {
-        models.delete(key);
-      }
-    }
-
-    return registerMany(provider.listModels());
+    return replaceProviderModels(providerId, provider.listModels());
   }
 
   function syncAllProviders() {
@@ -137,16 +158,11 @@ function createModelRegistry(options = {}) {
       options.discover === true &&
       typeof provider?.discoverModels === "function"
     ) {
-      const discovered = await provider.discoverModels();
+      const discovered = await provider.discoverModels(
+        options.discoveryOptions || {}
+      );
       const providerId = normalizeProviderId(provider.id);
-
-      for (const key of Array.from(models.keys())) {
-        if (key.startsWith(`${providerId}:`)) {
-          models.delete(key);
-        }
-      }
-
-      return registerMany(discovered);
+      return replaceProviderModels(providerId, discovered);
     }
 
     return syncProvider(provider);
@@ -166,6 +182,7 @@ function createModelRegistry(options = {}) {
   return Object.freeze({
     upsert,
     registerMany,
+    replaceProviderModels,
     get,
     list,
     listPublic,
