@@ -94,9 +94,13 @@ test("crawler records fetch failures without aborting the whole crawl",async()=>
         error.code="WEB_FETCH_NETWORK_ERROR";
         throw error;
       }
+      const body=url.endsWith("/good")
+        ? "<p>unique good page</p>"
+        : '<a href="/bad">bad</a><a href="/good">good</a>';
       return {
-        url,status:200,redirects:[],contentType:"text/html",bytes:50,
-        body:'<a href="/bad">bad</a><a href="/good">good</a>'
+        url,status:200,redirects:[],contentType:"text/html",
+        bytes:Buffer.byteLength(body),
+        body
       };
     }
   };
