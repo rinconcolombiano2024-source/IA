@@ -17,7 +17,7 @@ function providerFor(model) {
 }
 
 test("fallback is enabled only for retry-safe current intents", () => {
-  for (const intent of ["text","document","restaurant","book","code","website","repair"]) {
+  for (const intent of ["router","text","document","restaurant","book","code","website","repair"]) {
     assert.equal(isFallbackSafeIntent(intent), true, intent);
   }
 
@@ -27,6 +27,7 @@ test("fallback is enabled only for retry-safe current intents", () => {
 
 test("provider transport failures are eligible but local/client failures are not", () => {
   assert.equal(isFallbackEligibleError({code:"PROVIDER_NETWORK_ERROR"}), true);
+  assert.equal(isFallbackEligibleError({code:"PROVIDER_INVALID_RESPONSE"}), true);
   assert.equal(isFallbackEligibleError({code:"UPSTREAM_TIMEOUT"}), true);
   assert.equal(
     isFallbackEligibleError({code:"PROVIDER_HTTP_ERROR",providerStatus:503}),
@@ -159,6 +160,65 @@ test("global deadline prevents another fallback attempt", async () => {
       }
     }),
     (error) => error.code === "PROVIDER_NETWORK_ERROR"
+  );
+
+  assert.equal(calls,1);
+});
+
+
+test("router classification can fall back after invalid structured provider output", async () => {
+  const plan = {
+    primary:selection("openai","primary"),
+    fallback:selection("anthropic","fallback"),
+    secondFallback:selection("gemini","second")
+  };
+  const executed=[];
+
+  const output=await executeWithFallback({
+    plan,
+    intent:"router",
+    providerFor,
+    execute:async ({provider,selection:chosen})=>{
+      executed.push(provider.id + ":" + chosen.id);
+      if(provider.id==="openai"){
+        const error=new Error("invalid structured response");
+        error.code="PROVIDER_INVALID_RESPONSE";
+        error.provider="openai";
+        throw error;
+      }
+      return {intent:"code",title:"Code",format:"text",language:"es",confidence:0.9,notes:""};
+    }
+  });
+
+  assert.deepEqual(executed,["openai:primary","anthropic:fallback"]);
+  assert.equal(output.fallbackUsed,true);
+  assert.equal(output.selection.provider,"anthropic");
+  assert.equal(output.result.intent,"code");
+  assert.deepEqual(output.attempts.map((item)=>item.status),["failed","ok"]);
+});
+
+test("router classification stops after terminal provider validation error", async () => {
+  const plan={
+    primary:selection("openai","primary"),
+    fallback:selection("anthropic","fallback"),
+    secondFallback:null
+  };
+  let calls=0;
+
+  await assert.rejects(
+    executeWithFallback({
+      plan,
+      intent:"router",
+      providerFor,
+      execute:async()=>{
+        calls+=1;
+        const error=new Error("bad request");
+        error.code="PROVIDER_HTTP_ERROR";
+        error.providerStatus=400;
+        throw error;
+      }
+    }),
+    (error)=>error.providerStatus===400
   );
 
   assert.equal(calls,1);
