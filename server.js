@@ -20,6 +20,7 @@ const { createModelRegistry } = require("./src/models/model-registry");
 const { createModelRouter, capabilityForIntent } = require("./src/core/model-router");
 const { buildVideoUrls, parseVideoRoute } = require("./src/core/video-route");
 const { executeWithFallback } = require("./src/core/fallback-executor");
+const { createProviderHealth } = require("./src/core/provider-health");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
@@ -56,7 +57,16 @@ const providerRegistry = createProviderRegistry([
   groqProvider
 ]);
 const modelRegistry = createModelRegistry({ providerRegistry });
-const modelRouter = createModelRouter({ modelRegistry, providerRegistry });
+const providerHealth = createProviderHealth({
+  failureThreshold: env.AI_PROVIDER_FAILURE_THRESHOLD,
+  openMs: env.AI_PROVIDER_CIRCUIT_OPEN_MS,
+  latencyTargetMs: env.AI_PROVIDER_LATENCY_TARGET_MS
+});
+const modelRouter = createModelRouter({
+  modelRegistry,
+  providerRegistry,
+  providerHealth
+});
 
 const stateStore = createStateStore({
   mode: env.AI_STATE_STORE,
@@ -220,11 +230,13 @@ async function handleRun(req, res, requestId, deadline) {
         providerFor: (selection) => modelRouter.providerFor(selection),
         deadline,
         execute: async ({ provider, selection }) =>
-          classifyIntent(
-            provider,
-            selection.id,
-            prompt,
-            deadline
+          runTrackedProviderTask(provider, () =>
+            classifyIntent(
+              provider,
+              selection.id,
+              prompt,
+              deadline
+            )
           )
       });
 
@@ -270,16 +282,18 @@ async function handleRun(req, res, requestId, deadline) {
       providerFor: (selection) => modelRouter.providerFor(selection),
       deadline,
       execute: async ({ provider, selection }) =>
-        runTask({
-          provider,
-          modelSelection: selection,
-          prompt,
-          format,
-          route,
-          job,
-          history,
-          deadline
-        })
+        runTrackedProviderTask(provider, () =>
+          runTask({
+            provider,
+            modelSelection: selection,
+            prompt,
+            format,
+            route,
+            job,
+            history,
+            deadline
+          })
+        )
     });
 
     result = execution.result;
@@ -321,6 +335,23 @@ async function handleRun(req, res, requestId, deadline) {
   }
 
   sendJson(res, 200, result);
+}
+
+async function runTrackedProviderTask(provider, operation) {
+  const startedAt = Date.now();
+
+  try {
+    const result = await operation();
+    providerHealth.recordSuccess(provider.id, Date.now() - startedAt);
+    return result;
+  } catch (error) {
+    providerHealth.recordFailure(
+      provider.id,
+      error,
+      Date.now() - startedAt
+    );
+    throw error;
+  }
 }
 
 async function runTask(context) {
@@ -987,6 +1018,9 @@ function getHealth() {
     groqConfigured: groqProvider.isConfigured(),
     activeProvider: primaryTextProvider?.id || null,
     providers: providerRegistry.listPublic(),
+    providerHealth: providerHealth.summary(
+      providerRegistry.list().map((provider) => provider.id)
+    ),
     modelRegistry: modelRegistry.summary(),
     models: modelRegistry.listPublic(),
     routing: {

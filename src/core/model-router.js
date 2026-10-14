@@ -35,8 +35,21 @@ function compareNullableDescending(left, right, selector) {
   return compareNullableAscending(right, left, selector);
 }
 
-function rankModels(models) {
+function rankModels(models, providerHealth = null) {
   return [...models].sort((a, b) => {
+    const aHealthPenalty = providerHealth
+      ? 100 - providerHealth.score(a.provider)
+      : 0;
+    const bHealthPenalty = providerHealth
+      ? 100 - providerHealth.score(b.provider)
+      : 0;
+    const aEffectivePriority = a.priority + aHealthPenalty;
+    const bEffectivePriority = b.priority + bHealthPenalty;
+
+    if (aEffectivePriority !== bEffectivePriority) {
+      return aEffectivePriority - bEffectivePriority;
+    }
+
     if (a.priority !== b.priority) return a.priority - b.priority;
 
     const quality = compareNullableDescending(a, b, (model) => model.qualityScore);
@@ -81,6 +94,7 @@ function createRoutingError(message, code, details = {}) {
 function createModelRouter(options = {}) {
   const modelRegistry = options.modelRegistry;
   const providerRegistry = options.providerRegistry;
+  const providerHealth = options.providerHealth || null;
 
   if (!modelRegistry || typeof modelRegistry.findByCapability !== "function") {
     throw new Error("Model router requires a model registry.");
@@ -118,6 +132,13 @@ function createModelRouter(options = {}) {
     }
 
     let candidates = modelRegistry.findByCapability(capability);
+    const manualSelection = Boolean(preferredProvider || preferredModel);
+
+    if (!manualSelection && providerHealth) {
+      candidates = candidates.filter((model) =>
+        providerHealth.canRoute(model.provider)
+      );
+    }
 
     if (preferredProvider) {
       candidates = candidates.filter((model) => model.provider === preferredProvider);
@@ -127,7 +148,7 @@ function createModelRouter(options = {}) {
       candidates = candidates.filter((model) => model.id === preferredModel);
     }
 
-    candidates = rankModels(candidates);
+    candidates = rankModels(candidates, providerHealth);
 
     if (!candidates.length) {
       throw createRoutingError(
@@ -182,7 +203,13 @@ function createModelRouter(options = {}) {
             provider: model.provider,
             model: model.id,
             capabilities: [...model.capabilities],
-            priority: model.priority
+            priority: model.priority,
+            healthScore: providerHealth
+              ? providerHealth.score(model.provider)
+              : null,
+            circuit: providerHealth
+              ? providerHealth.circuitState(model.provider)
+              : null
           }
         : null;
 
