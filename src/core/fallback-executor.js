@@ -1,6 +1,7 @@
 "use strict";
 
 const SAFE_FALLBACK_INTENTS = new Set([
+  "router",
   "text",
   "document",
   "restaurant",
@@ -23,6 +24,7 @@ function isFallbackEligibleError(error) {
 
   if (code === "REQUEST_DEADLINE_EXCEEDED") return false;
   if (code === "PROVIDER_NETWORK_ERROR") return true;
+  if (code === "PROVIDER_INVALID_RESPONSE") return true;
   if (code === "UPSTREAM_TIMEOUT") return true;
 
   if (code === "PROVIDER_HTTP_ERROR") {
