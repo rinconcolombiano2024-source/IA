@@ -93,10 +93,22 @@ scrubLegacyPrivacyData();
 
 const server = http.createServer(async (req, res) => {
   const requestId = crypto.randomUUID();
-  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-
   applySecurityHeaders(req, res);
   res.setHeader("X-Request-ID", requestId);
+
+  let url;
+  try {
+    url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+  } catch {
+    // Request targets and Host are untrusted, even before authentication.
+    // A malformed URL must not reject the async HTTP listener and stop Node.
+    sendJson(res, 400, {
+      error: "La URL de la peticion no es valida.",
+      code: "INVALID_REQUEST_URL",
+      requestId
+    });
+    return;
+  }
 
   if (!isPublicRequest(req.method, url.pathname) && !authorizeRequest(req, res)) {
     return;
