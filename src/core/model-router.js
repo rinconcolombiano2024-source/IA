@@ -69,8 +69,12 @@ function rankModels(models) {
 
 function createRoutingError(message, code, details = {}) {
   const error = new Error(message);
+  error.name = "RoutingRequestError";
   error.code = code;
   error.routing = details;
+  error.statusCode = 400;
+  error.publicMessage = message;
+  error.isClientRequestError = true;
   return error;
 }
 
@@ -88,12 +92,30 @@ function createModelRouter(options = {}) {
 
   function plan(input = {}) {
     const capability = String(input.capability || "text").trim().toLowerCase();
-    const preferredProvider = input.preferredProvider
-      ? normalizeProviderId(input.preferredProvider)
-      : "";
-    const preferredModel = input.preferredModel
-      ? normalizeModelId(input.preferredModel)
-      : "";
+    let preferredProvider = "";
+    let preferredModel = "";
+
+    if (input.preferredProvider) {
+      try {
+        preferredProvider = normalizeProviderId(input.preferredProvider);
+      } catch {
+        throw createRoutingError(
+          "El proveedor solicitado no es valido.",
+          "INVALID_PROVIDER_SELECTION"
+        );
+      }
+    }
+
+    if (input.preferredModel) {
+      try {
+        preferredModel = normalizeModelId(input.preferredModel);
+      } catch {
+        throw createRoutingError(
+          "El modelo solicitado no es valido.",
+          "INVALID_MODEL_SELECTION"
+        );
+      }
+    }
 
     let candidates = modelRegistry.findByCapability(capability);
 
