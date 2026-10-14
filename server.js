@@ -15,6 +15,7 @@ const { createOpenAIProvider } = require("./src/providers/openai/provider");
 const { createModelRegistry } = require("./src/models/model-registry");
 const { createModelRouter, capabilityForIntent } = require("./src/core/model-router");
 const { buildVideoUrls, parseVideoRoute } = require("./src/core/video-route");
+const { executeWithFallback } = require("./src/core/fallback-executor");
 
 const rootDir = __dirname;
 const publicDir = path.join(rootDir, "public");
@@ -207,23 +208,38 @@ async function handleRun(req, res, requestId, deadline) {
     preferredProvider,
     preferredModel
   });
-  const provider = modelRouter.providerFor(executionPlan.primary);
   const job = createJob(route.intent);
   let result;
 
   try {
-    result = await runTask({
-      provider,
-      modelSelection: executionPlan.primary,
-      prompt,
-      format,
-      route,
-      job,
-      history,
-      deadline
+    const execution = await executeWithFallback({
+      plan: executionPlan,
+      intent: route.intent,
+      providerFor: (selection) => modelRouter.providerFor(selection),
+      deadline,
+      execute: async ({ provider, selection }) =>
+        runTask({
+          provider,
+          modelSelection: selection,
+          prompt,
+          format,
+          route,
+          job,
+          history,
+          deadline
+        })
     });
 
-    result.routing = modelRouter.publicPlan(executionPlan);
+    result = execution.result;
+    result.routing = {
+      ...modelRouter.publicPlan(executionPlan),
+      selected: {
+        provider: execution.selection.provider,
+        model: execution.selection.id
+      },
+      fallbackUsed: execution.fallbackUsed,
+      attempts: execution.attempts
+    };
     await recordHistory({
       id: job.id,
       at: new Date().toISOString(),
@@ -767,7 +783,13 @@ async function callProviderJson(provider, endpointName, payload, deadline, retri
   );
 
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(provider.errorMessage(data));
+  if (!response.ok) {
+    const error = new Error(provider.errorMessage(data));
+    error.code = "PROVIDER_HTTP_ERROR";
+    error.provider = provider.id;
+    error.providerStatus = response.status;
+    throw error;
+  }
   return data;
 }
 
@@ -821,7 +843,9 @@ async function fetchProviderWithRetry(provider, url, options, deadline, retries)
         throw createDeadlineError();
       }
 
-      lastError = aborted ? createUpstreamTimeoutError() : error;
+      lastError = aborted
+        ? createUpstreamTimeoutError()
+        : createProviderNetworkError(provider, error);
 
       if (attempt === maxRetries) {
         throw lastError;
@@ -1729,6 +1753,18 @@ function createDeadlineError() {
 function createUpstreamTimeoutError() {
   const error = new Error("El proveedor de IA no respondio dentro del tiempo permitido.");
   error.code = "UPSTREAM_TIMEOUT";
+  return error;
+}
+
+function createProviderNetworkError(provider, cause) {
+  if (cause?.code === "PROVIDER_NETWORK_ERROR") return cause;
+
+  const error = new Error(
+    "No se pudo establecer comunicacion con el proveedor de IA."
+  );
+  error.code = "PROVIDER_NETWORK_ERROR";
+  error.provider = String(provider?.id || "").slice(0, 64);
+  error.cause = cause;
   return error;
 }
 
