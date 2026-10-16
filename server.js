@@ -195,6 +195,15 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       sendJson(res, 200, { answer });
+    } catch (error) {
+      // A failed provider or exhausted model plan must never escape the async
+      // HTTP listener as an unhandled rejection or expose provider internals.
+      console.error("Restaurant chat generation failed:", String(error?.code || "PROVIDER_UNAVAILABLE"));
+      if (!res.headersSent) {
+        sendJson(res, 503, { error: "assistant_unavailable" });
+      } else if (!res.writableEnded) {
+        res.end();
+      }
     } finally {
       runtimeGuard.releaseRun();
     }
