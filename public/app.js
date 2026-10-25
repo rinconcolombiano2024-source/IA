@@ -51,8 +51,11 @@ form.addEventListener("submit", async (event) => {
     loadingMessage.remove();
 
     if (!response.ok) {
-      if (response.status === 401 || response.status === 503 && data.code === "AUTH_NOT_CONFIGURED") {
-        addMessage("ai", "IA está abierta al público, pero el uso de modelos todavía requiere una cuenta autorizada.", "El registro individual se habilitará antes del lanzamiento público de las funciones de pago.");
+      if (response.status === 401 || (response.status === 503 && data.code === "AUTH_NOT_CONFIGURED")) {
+        // Do not lose user work when access is unavailable; the server must
+        // continue rejecting unauthenticated paid operations.
+        promptInput.value = prompt;
+        addMessage("ai", "No se generó contenido: esta función todavía requiere acceso autorizado.", "Tu solicitud sigue en el cuadro de texto. No compartas contraseñas de administrador; el acceso individual aún no está habilitado.");
         return;
       }
       addMessage("ai", data.error || "No pude completar la peticion.", data.detail || data.recovery);
