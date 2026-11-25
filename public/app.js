@@ -9,7 +9,11 @@ const healthDot = document.querySelector("#healthDot");
 const healthText = document.querySelector("#healthText");
 const modelText = document.querySelector("#modelText");
 
-let mode = "auto";
+let mode = "universal";
+let conversationContext = [];
+const includeContext = document.querySelector("#includeContext");
+const newConversation = document.querySelector("#newConversation");
+const modePrivacy = document.querySelector("#modePrivacy");
 const providerSelect = document.querySelector("#providerSelect");
 let lastAnswer = "";
 const dictateButton = document.querySelector("#dictateButton");
@@ -20,7 +24,10 @@ checkHealth();
 modeButtons.forEach((button) => {
   button.addEventListener("click", () => {
     mode = button.dataset.mode;
-    providerSelect.disabled = mode === "team" || mode === "compare";
+    providerSelect.disabled = ["universal", "team", "compare"].includes(mode);
+    includeContext.disabled = mode !== "universal";
+    modePrivacy.hidden = !providerSelect.disabled;
+    modeButtons.forEach(item => item.setAttribute("aria-pressed", String(item === button)));
     modeButtons.forEach((item) => item.classList.toggle("is-active", item === button));
     promptInput.focus();
   });
@@ -43,6 +50,9 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
+  const submittedMode = mode;
+  const shareContext = submittedMode === "universal" && includeContext.checked;
+  const context = shareContext ? conversationContext.slice(-8) : [];
   addMessage("user", prompt);
   promptInput.value = "";
   setLoading(true);
@@ -53,7 +63,7 @@ form.addEventListener("submit", async (event) => {
     const response = await fetch("/api/run", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ prompt, mode, format: formatSelect.value, provider: providerSelect.disabled ? "" : providerSelect.value })
+      body: JSON.stringify({ prompt, mode: submittedMode, format: formatSelect.value, provider: providerSelect.disabled ? "" : providerSelect.value, includeContext: shareContext, context })
     });
 
     const data = await response.json();
@@ -70,6 +80,10 @@ form.addEventListener("submit", async (event) => {
     }
 
     renderResult(data, prompt);
+    if (submittedMode === "universal" && shareContext && includeContext.checked && typeof data.text === "string") {
+      conversationContext.push({role:"user",text:prompt.slice(0,1500)}, {role:"assistant",text:data.text.slice(0,1500)});
+      conversationContext = conversationContext.slice(-8);
+    }
   } catch (error) {
     loadingMessage.remove();
     if (!promptInput.value.trim()) promptInput.value = prompt;
@@ -109,6 +123,22 @@ function renderResult(data, prompt) {
   }
 
   lastAnswer = data.text || "";
+  if (data.collaboration) {
+    const c = data.collaboration;
+    const labels = { synthesized: "Respuesta integrada", partial: "Respuesta integrada parcial", single: "Respuesta de un solo proveedor", fallback: "Respuesta individual: síntesis no disponible" };
+    const article = addMessage("ai", lastAnswer, labels[c.status] || "Respuesta");
+    const detail = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = c.succeeded + " de " + c.attempted + " proveedores respondieron";
+    detail.append(summary);
+    for (const entry of c.providers || []) {
+      const item = document.createElement("p");
+      item.textContent = entry.provider + " · " + entry.model + " · " + (entry.status === "ok" ? "respondió" : "no disponible");
+      detail.append(item);
+    }
+    article.querySelector(".bubble").append(detail);
+    return;
+  }
   addMessage("ai", data.text || "Listo.", data.synthesis ? data.title + " · " + data.synthesis.provider : data.title);
   if (Array.isArray(data.contributions)) {
     for (const entry of data.contributions) {
@@ -270,6 +300,7 @@ async function pollVideo(statusUrl, statusNode, linkNode) {
 
 function setLoading(isLoading) {
   sendButton.disabled = isLoading;
+  newConversation.disabled = isLoading;
   sendButton.textContent = isLoading ? "Creando..." : "Crear";
 }
 
@@ -359,3 +390,17 @@ updateConnection();
 if ("serviceWorker" in navigator && window.isSecureContext) {
   navigator.serviceWorker.register("/sw.js").catch(() => { /* Web access remains available. */ });
 }
+
+includeContext.addEventListener("change", () => {
+  if (!includeContext.checked) conversationContext = [];
+});
+newConversation.addEventListener("click", () => {
+  if (sendButton.disabled) return;
+  conversationContext = [];
+  lastAnswer = "";
+  promptInput.value = "";
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  messages.textContent = "";
+  addMessage("ai", "Nueva conversación. ¿En qué puedo ayudarte?");
+  promptInput.focus();
+});

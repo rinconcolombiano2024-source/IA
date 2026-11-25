@@ -16,7 +16,10 @@
       <aside class="sidebar">
         <div class="brand">
           <p class="eyebrow">Mi IA Max</p>
-          <h1>Centro creativo de IA</h1>
+          <h1>Tu asistente universal</h1>
+          <p class="brand-promise">Una pregunta. Varias inteligencias. Una respuesta.</p>
+          <a class="access-link" href="/api/access">Acceso autorizado</a>
+          <button id="newConversation" class="mode" type="button">Nueva conversación</button>
           <button id="installButton" class="mode" type="button">Instalar / acceso directo</button>
           <p id="installHint" role="status" hidden></p>
         </div>
@@ -30,9 +33,10 @@
         </section>
 
         <section aria-label="Capacidades">
-          <h2>Modo</h2>
+          <h2>¿Qué quieres hacer?</h2>
           <div class="mode-grid">
-            <button class="mode is-active" data-mode="auto" type="button">Auto</button>
+            <button class="mode is-active universal-mode" data-mode="universal" type="button" aria-pressed="true">Asistente universal</button>
+            <button class="mode" data-mode="auto" type="button">Crear automáticamente</button>
             <button class="mode" data-mode="text" type="button">Texto</button>
             <button class="mode" data-mode="team" type="button">Equipo IA</button>
             <button class="mode" data-mode="compare" type="button">Comparar IA</button>
@@ -49,7 +53,7 @@
 
         <section aria-label="Proveedor de IA">
           <h2>Proveedor</h2>
-          <select id="providerSelect" aria-label="Proveedor de IA">
+          <select id="providerSelect" aria-label="Proveedor de IA" disabled>
             <option value="">Automático</option>
             <option value="openai">OpenAI</option><option value="gemini">Gemini</option>
             <option value="anthropic">Claude</option><option value="deepseek">DeepSeek</option>
@@ -80,7 +84,7 @@
         <header class="topbar">
           <div>
             <p class="eyebrow">Asistente multimodal</p>
-            <h2>Texto, documentos, codigo, imagenes y video</h2>
+            <h2>¿En qué puedo ayudarte?</h2>
           </div>
           <select id="formatSelect" aria-label="Formato de documento">
             <option value="bundle">Paquete completo</option>
@@ -97,13 +101,17 @@
           <article class="message ai">
             <div class="avatar">AI</div>
             <div class="bubble">
-              Dime lo que quieres crear. Puedo escribir, generar documentos descargables, crear codigo, preparar menus, estructurar libros, hacer imagenes y arrancar videos si tu cuenta tiene acceso.
+              Pregúntame lo que quieras. En modo universal consultaré a los proveedores disponibles y te entregaré una sola respuesta. También puedes elegir un modo de creación para generar archivos, imágenes o videos.
             </div>
           </article>
         </div>
 
         <p class="eyebrow" role="note">El sitio es público. La generación de contenido requiere acceso autorizado; estamos preparando cuentas individuales.</p>
 
+        <div class="conversation-options">
+          <label><input id="includeContext" type="checkbox" /> Usar mensajes anteriores de esta conversación (se comparten con los proveedores consultados)</label>
+          <p id="modePrivacy" role="note">El modo universal envía tu pregunta a varios proveedores de IA y puede aumentar el coste. No incluyas información sensible sin autorización.</p>
+        </div>
         <form id="promptForm" class="composer">
           <label class="sr-only" for="prompt">Peticion</label>
           <textarea

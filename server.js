@@ -19,6 +19,7 @@ const { createXaiProvider } = require("./src/providers/xai/provider");
 const { createGroqProvider } = require("./src/providers/groq/provider");
 const { createDeepSeekProvider } = require("./src/providers/deepseek/provider");
 const { orchestrate } = require("./src/core/team-orchestrator");
+const { answerUniversal } = require("./src/core/universal-assistant");
 const { createModelRegistry } = require("./src/models/model-registry");
 const { createModelDiscovery } = require("./src/models/model-discovery");
 const { createModelRouter, capabilityForIntent } = require("./src/core/model-router");
@@ -228,6 +229,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/access") {
+      res.writeHead(303, { Location: "/", "Cache-Control": "no-store" });
+      res.end();
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/health") {
       sendJson(res, 200, getHealth());
       return;
@@ -331,6 +338,47 @@ async function handleRun(req, res, requestId, deadline) {
       requestId,
       maxPromptChars: promptValidation.maxPromptChars
     });
+    return;
+  }
+
+  if (requestedMode === "universal") {
+    const selections = [];
+    for (const provider of providerRegistry.findByCapability("text")) {
+      if (!providerHealth.canRoute(provider.id)) continue;
+      try { selections.push(modelRouter.plan({ capability: "text", preferredProvider: provider.id }).primary); } catch { /* unavailable */ }
+    }
+    // Reserve a portion of the existing request deadline for synthesis.
+    const phaseBudget = Math.min(90000, Math.floor(deadline.usableMs() * 0.55));
+    const phaseEnds = Date.now() + phaseBudget;
+    const phaseDeadline = {
+      usableMs: () => Math.max(0, Math.min(deadline.usableMs(), phaseEnds - Date.now())),
+      attemptTimeoutMs: max => Math.max(0, Math.min(deadline.attemptTimeoutMs(max), phaseEnds - Date.now())),
+      canWait: (delay, min) => deadline.canWait(delay, min) && phaseEnds - Date.now() > delay + min
+    };
+    const outcome = await answerUniversal({
+      prompt, context: body.includeContext === true ? body.context : [],
+      selections, limit: parsePositiveInteger(env.AI_UNIVERSAL_MAX_PROVIDERS, 6, 1, 12),
+      canSynthesize: () => deadline.usableMs() >= 1000,
+      generate: async (selection, instructions, input, phase) => {
+        const provider = modelRouter.providerFor(selection);
+        return runTrackedProviderTask(provider, async () => {
+          const data = await createTextResponse(provider, { model: selection.id, purpose: "general", instructions, input }, phase === "contribution" ? phaseDeadline : deadline, 0);
+          const text = provider.extractText(data);
+          if (!text) throw Error("Empty model response");
+          return text;
+        });
+      }
+    });
+    if (!outcome.text) {
+      sendJson(res, 503, { error: "No respondió ningún proveedor de IA disponible. Comprueba la configuración o inténtalo de nuevo.", code: "UNIVERSAL_UNAVAILABLE" });
+      return;
+    }
+    await recordHistory({
+      id: requestId, requestId, at: new Date().toISOString(),
+      mode: "text", status: "ok", files: []
+    });
+    const { text, ...collaboration } = outcome;
+    sendJson(res, 200, { type: "text", title: "Mi IA Max", text, collaboration, files: [] });
     return;
   }
 
