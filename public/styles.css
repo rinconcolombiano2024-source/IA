@@ -438,7 +438,8 @@ select:focus {
 .sidebar small { display: block; overflow-wrap: break-word; }
 .brand #installButton { width: 100%; margin-top: 12px; padding: 8px; }
 #installHint { font-size: .875rem; line-height: 1.5; }
-.main-panel { grid-template-rows: auto auto auto minmax(0,1fr) auto auto; align-content: start; }
+.main-panel { display: flex; flex-direction: column; }
+.main-panel .messages { flex: 1 1 auto; }
 .main-panel > .eyebrow { color: #475569; padding: 8px 18px; margin: 0; }
 #connectionStatus { color: #92400e; background: #fef3c7; padding: 12px; margin: 0; }
 .bubble { max-width: 100%; overflow-wrap: break-word; overflow-wrap: anywhere; }
