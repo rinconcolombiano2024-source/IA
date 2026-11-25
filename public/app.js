@@ -9,13 +9,25 @@ const healthDot = document.querySelector("#healthDot");
 const healthText = document.querySelector("#healthText");
 const modelText = document.querySelector("#modelText");
 
-let mode = "auto";
+let mode = "universal";
+let conversationContext = [];
+const includeContext = document.querySelector("#includeContext");
+const newConversation = document.querySelector("#newConversation");
+const modePrivacy = document.querySelector("#modePrivacy");
+const providerSelect = document.querySelector("#providerSelect");
+let lastAnswer = "";
+const dictateButton = document.querySelector("#dictateButton");
+const speakButton = document.querySelector("#speakButton");
 
 checkHealth();
 
 modeButtons.forEach((button) => {
   button.addEventListener("click", () => {
     mode = button.dataset.mode;
+    providerSelect.disabled = ["universal", "team", "compare"].includes(mode);
+    includeContext.disabled = mode !== "universal";
+    modePrivacy.hidden = !providerSelect.disabled;
+    modeButtons.forEach(item => item.setAttribute("aria-pressed", String(item === button)));
     modeButtons.forEach((item) => item.classList.toggle("is-active", item === button));
     promptInput.focus();
   });
@@ -32,8 +44,15 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const prompt = promptInput.value.trim();
-  if (!prompt) return;
+  if (!prompt || sendButton.disabled) return;
+  if (navigator.onLine === false) {
+    addMessage("ai", "Sin conexión. Tu petición sigue en el cuadro de texto.");
+    return;
+  }
 
+  const submittedMode = mode;
+  const shareContext = submittedMode === "universal" && includeContext.checked;
+  const context = shareContext ? conversationContext.slice(-8) : [];
   addMessage("user", prompt);
   promptInput.value = "";
   setLoading(true);
@@ -44,13 +63,14 @@ form.addEventListener("submit", async (event) => {
     const response = await fetch("/api/run", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ prompt, mode, format: formatSelect.value })
+      body: JSON.stringify({ prompt, mode: submittedMode, format: formatSelect.value, provider: providerSelect.disabled ? "" : providerSelect.value, includeContext: shareContext, context })
     });
 
     const data = await response.json();
     loadingMessage.remove();
 
     if (!response.ok) {
+      if (!promptInput.value.trim()) promptInput.value = prompt;
       if (response.status === 401 || response.status === 503 && data.code === "AUTH_NOT_CONFIGURED") {
         addMessage("ai", "IA está abierta al público, pero el uso de modelos todavía requiere una cuenta autorizada.", "El registro individual se habilitará antes del lanzamiento público de las funciones de pago.");
         return;
@@ -60,9 +80,14 @@ form.addEventListener("submit", async (event) => {
     }
 
     renderResult(data, prompt);
+    if (submittedMode === "universal" && shareContext && includeContext.checked && typeof data.text === "string") {
+      conversationContext.push({role:"user",text:prompt.slice(0,1500)}, {role:"assistant",text:data.text.slice(0,1500)});
+      conversationContext = conversationContext.slice(-8);
+    }
   } catch (error) {
     loadingMessage.remove();
-    addMessage("ai", "No pude conectar con el servidor.", "Revisa que la app este encendida con start.ps1.");
+    if (!promptInput.value.trim()) promptInput.value = prompt;
+    addMessage("ai", "No pude conectar con el servidor.", "Comprueba Internet o la disponibilidad del servicio. No se reenviará automáticamente.");
   } finally {
     setLoading(false);
   }
@@ -81,8 +106,8 @@ async function checkHealth() {
       : "Sistema disponible";
   } catch {
     healthDot.classList.add("is-warn");
-    healthText.textContent = "Servidor apagado";
-    modelText.textContent = "Ejecuta start.ps1";
+    healthText.textContent = "Servicio no disponible";
+    modelText.textContent = "Comprueba tu conexión a Internet";
   }
 }
 
@@ -97,7 +122,30 @@ function renderResult(data, prompt) {
     return;
   }
 
-  addMessage("ai", data.text || "Listo.", data.title);
+  lastAnswer = data.text || "";
+  if (data.collaboration) {
+    const c = data.collaboration;
+    const labels = { synthesized: "Respuesta integrada", partial: "Respuesta integrada parcial", single: "Respuesta de un solo proveedor", fallback: "Respuesta individual: síntesis no disponible" };
+    const article = addMessage("ai", lastAnswer, labels[c.status] || "Respuesta");
+    const detail = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = c.succeeded + " de " + c.attempted + " proveedores respondieron";
+    detail.append(summary);
+    for (const entry of c.providers || []) {
+      const item = document.createElement("p");
+      item.textContent = entry.provider + " · " + entry.model + " · " + (entry.status === "ok" ? "respondió" : "no disponible");
+      detail.append(item);
+    }
+    article.querySelector(".bubble").append(detail);
+    return;
+  }
+  addMessage("ai", data.text || "Listo.", data.synthesis ? data.title + " · " + data.synthesis.provider : data.title);
+  if (Array.isArray(data.contributions)) {
+    for (const entry of data.contributions) {
+      addMessage("ai", entry.status === "ok" ? entry.text : "Proveedor no disponible para esta solicitud.", entry.provider + " · " + entry.model);
+    }
+    if (data.partial) addMessage("ai", "Resultado parcial: no todos los modelos o la síntesis respondieron.");
+  }
   if (Array.isArray(data.files) && data.files.length) {
     addFilesMessage(data.title || "Archivos creados", data.files);
   }
@@ -252,6 +300,7 @@ async function pollVideo(statusUrl, statusNode, linkNode) {
 
 function setLoading(isLoading) {
   sendButton.disabled = isLoading;
+  newConversation.disabled = isLoading;
   sendButton.textContent = isLoading ? "Creando..." : "Crear";
 }
 
@@ -279,3 +328,79 @@ function formatBytes(bytes = 0) {
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (Recognition && dictateButton) {
+  dictateButton.hidden = false;
+  dictateButton.addEventListener("click", () => {
+    const recognition = new Recognition();
+    recognition.lang = document.documentElement.lang || "es";
+    recognition.interimResults = false;
+    recognition.onresult = event => {
+      const words = event.results[0][0].transcript;
+      promptInput.value = [promptInput.value, words].filter(Boolean).join(" ");
+      promptInput.focus();
+    };
+    recognition.onerror = () => addMessage("ai", "No se pudo utilizar el micrófono. Comprueba los permisos.");
+    recognition.onend = () => { dictateButton.disabled = false; };
+    try { recognition.start(); dictateButton.disabled = true; }
+    catch { dictateButton.disabled = false; }
+  });
+}
+if ("speechSynthesis" in window && speakButton) {
+  speakButton.hidden = false;
+  speakButton.addEventListener("click", () => {
+    if (!lastAnswer) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(lastAnswer.slice(0, 12000));
+    utterance.lang = document.documentElement.lang || "es";
+    window.speechSynthesis.speak(utterance);
+  });
+}
+
+const installButton = document.querySelector("#installButton");
+const installHint = document.querySelector("#installHint");
+let installPrompt = null;
+window.addEventListener("beforeinstallprompt", event => {
+  event.preventDefault();
+  installPrompt = event;
+});
+window.addEventListener("appinstalled", () => {
+  installPrompt = null;
+  installButton.hidden = true;
+});
+function installedMode() {
+  return (typeof window.matchMedia === "function" && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+}
+if (installedMode()) installButton.hidden = true;
+installButton.addEventListener("click", async () => {
+  if (installPrompt) {
+    const pending = installPrompt;
+    installPrompt = null;
+    try { await pending.prompt(); return; } catch { /* Show manual help. */ }
+  }
+  installHint.hidden = false;
+  installHint.textContent = "iPhone/iPad: Compartir > Añadir a pantalla de inicio. Android: menú del navegador > Instalar o Añadir a pantalla de inicio. Ordenador: menú del navegador > Instalar aplicación (si está disponible). También puedes guardar un marcador.";
+});
+const connectionStatus = document.querySelector("#connectionStatus");
+function updateConnection() { connectionStatus.hidden = navigator.onLine !== false; }
+window.addEventListener("online", () => { updateConnection(); checkHealth(); });
+window.addEventListener("offline", updateConnection);
+updateConnection();
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register("/sw.js").catch(() => { /* Web access remains available. */ });
+}
+
+includeContext.addEventListener("change", () => {
+  if (!includeContext.checked) conversationContext = [];
+});
+newConversation.addEventListener("click", () => {
+  if (sendButton.disabled) return;
+  conversationContext = [];
+  lastAnswer = "";
+  promptInput.value = "";
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+  messages.textContent = "";
+  addMessage("ai", "Nueva conversación. ¿En qué puedo ayudarte?");
+  promptInput.focus();
+});

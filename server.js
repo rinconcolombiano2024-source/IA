@@ -17,6 +17,9 @@ const { createAnthropicProvider } = require("./src/providers/anthropic/provider"
 const { createGeminiProvider } = require("./src/providers/gemini/provider");
 const { createXaiProvider } = require("./src/providers/xai/provider");
 const { createGroqProvider } = require("./src/providers/groq/provider");
+const { createDeepSeekProvider } = require("./src/providers/deepseek/provider");
+const { orchestrate } = require("./src/core/team-orchestrator");
+const { answerUniversal } = require("./src/core/universal-assistant");
 const { createModelRegistry } = require("./src/models/model-registry");
 const { createModelDiscovery } = require("./src/models/model-discovery");
 const { createModelRouter, capabilityForIntent } = require("./src/core/model-router");
@@ -51,12 +54,14 @@ const anthropicProvider = createAnthropicProvider({ env });
 const geminiProvider = createGeminiProvider({ env });
 const xaiProvider = createXaiProvider({ env });
 const groqProvider = createGroqProvider({ env });
+const deepSeekProvider = createDeepSeekProvider({ env });
 const providerRegistry = createProviderRegistry([
   openAiProvider,
   anthropicProvider,
   geminiProvider,
   xaiProvider,
-  groqProvider
+  groqProvider,
+  deepSeekProvider
 ]);
 const modelRegistry = createModelRegistry({ providerRegistry });
 const modelDiscovery = createModelDiscovery({
@@ -224,6 +229,12 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/access") {
+      res.writeHead(303, { Location: "/", "Cache-Control": "no-store" });
+      res.end();
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/health") {
       sendJson(res, 200, getHealth());
       return;
@@ -326,6 +337,78 @@ async function handleRun(req, res, requestId, deadline) {
       code: promptValidation.code,
       requestId,
       maxPromptChars: promptValidation.maxPromptChars
+    });
+    return;
+  }
+
+  if (requestedMode === "universal") {
+    const selections = [];
+    for (const provider of providerRegistry.findByCapability("text")) {
+      if (!providerHealth.canRoute(provider.id)) continue;
+      try { selections.push(modelRouter.plan({ capability: "text", preferredProvider: provider.id }).primary); } catch { /* unavailable */ }
+    }
+    // Reserve a portion of the existing request deadline for synthesis.
+    const phaseBudget = Math.min(90000, Math.floor(deadline.usableMs() * 0.55));
+    const phaseEnds = Date.now() + phaseBudget;
+    const phaseDeadline = {
+      usableMs: () => Math.max(0, Math.min(deadline.usableMs(), phaseEnds - Date.now())),
+      attemptTimeoutMs: max => Math.max(0, Math.min(deadline.attemptTimeoutMs(max), phaseEnds - Date.now())),
+      canWait: (delay, min) => deadline.canWait(delay, min) && phaseEnds - Date.now() > delay + min
+    };
+    const outcome = await answerUniversal({
+      prompt, context: body.includeContext === true ? body.context : [],
+      selections, limit: parsePositiveInteger(env.AI_UNIVERSAL_MAX_PROVIDERS, 6, 1, 12),
+      canSynthesize: () => deadline.usableMs() >= 1000,
+      generate: async (selection, instructions, input, phase) => {
+        const provider = modelRouter.providerFor(selection);
+        return runTrackedProviderTask(provider, async () => {
+          const data = await createTextResponse(provider, { model: selection.id, purpose: "general", instructions, input }, phase === "contribution" ? phaseDeadline : deadline, 0);
+          const text = provider.extractText(data);
+          if (!text) throw Error("Empty model response");
+          return text;
+        });
+      }
+    });
+    if (!outcome.text) {
+      sendJson(res, 503, { error: "No respondió ningún proveedor de IA disponible. Comprueba la configuración o inténtalo de nuevo.", code: "UNIVERSAL_UNAVAILABLE" });
+      return;
+    }
+    await recordHistory({
+      id: requestId, requestId, at: new Date().toISOString(),
+      mode: "text", status: "ok", files: []
+    });
+    const { text, ...collaboration } = outcome;
+    sendJson(res, 200, { type: "text", title: "Mi IA Max", text, collaboration, files: [] });
+    return;
+  }
+
+  if (requestedMode === "team" || requestedMode === "compare") {
+    const selections = [];
+    for (const provider of providerRegistry.findByCapability("text")) {
+      if (!providerHealth.canRoute(provider.id)) continue;
+      try { selections.push(modelRouter.plan({ capability: "text", preferredProvider: provider.id }).primary); } catch { /* unavailable */ }
+    }
+    const outcome = await orchestrate({
+      mode: requestedMode, prompt, selections,
+      generate: async (selection, instructions, input) => {
+        const provider = modelRouter.providerFor(selection);
+        return runTrackedProviderTask(provider, async () => {
+          const data = await createTextResponse(provider, { model: selection.id, purpose: "general", instructions, input }, deadline, 0);
+          const answer = provider.extractText(data);
+          if (!answer) throw Error("Empty model response");
+          return answer;
+        });
+      }
+    });
+    if (outcome.unavailable) {
+      sendJson(res, 400, { error: "Configura al menos dos proveedores de texto disponibles para trabajar en equipo.", code: "TEAM_UNAVAILABLE" });
+      return;
+    }
+    const count = outcome.contributions.filter(c => c.status === "ok").length;
+    sendJson(res, count ? 200 : 503, {
+      type: "text", title: requestedMode === "team" ? "Equipo IA" : "Comparación IA",
+      text: outcome.synthesis?.text || (count ? "Respuestas independientes disponibles abajo." : "Ningún proveedor respondió correctamente."),
+      ...outcome, files: []
     });
     return;
   }
@@ -1147,6 +1230,7 @@ function getHealth() {
     geminiConfigured: geminiProvider.isConfigured(),
     xaiConfigured: xaiProvider.isConfigured(),
     groqConfigured: groqProvider.isConfigured(),
+    deepSeekConfigured: deepSeekProvider.isConfigured(),
     activeProvider: primaryTextProvider?.id || null,
     providers: providerRegistry.listPublic(),
     providerHealth: providerHealth.summary(
@@ -1280,6 +1364,8 @@ function serveFile(pathname, res) {
 
       if (isGenerated) {
         Object.assign(headers, generatedArtifactHeaders(filePath));
+      } else if (relativePath === "sw.js" || relativePath === "manifest.webmanifest" || relativePath === "index.html") {
+        headers["Cache-Control"] = "no-cache";
       }
 
       res.writeHead(200, headers);
@@ -1953,6 +2039,7 @@ function mimeForPath(filePath) {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
+    ".webmanifest": "application/manifest+json; charset=utf-8",
     ".md": "text/markdown; charset=utf-8",
     ".mp4": "video/mp4",
     ".pdf": "application/pdf",
@@ -1982,7 +2069,9 @@ function applySecurityHeaders(req, res) {
   );
   res.setHeader(
     "Permissions-Policy",
-    "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    req.method === "GET" && ["/", "/index.html"].includes(String(req.url || "").split("?")[0])
+      ? "camera=(), microphone=(self), geolocation=(), payment=(), usb=()"
+      : "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
   );
 
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "")

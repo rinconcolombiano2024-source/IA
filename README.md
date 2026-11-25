@@ -101,3 +101,25 @@ Si tu cuenta no tiene acceso a algun modelo, cambia el valor por un modelo dispo
 - `generated/`: trabajos creados por la IA.
 - `data/history.json`: historial local de trabajos.
 - `data/errors.log`: errores registrados para diagnostico.
+
+## Equipo de IA y voz
+
+- Selecciona un proveedor o conserva Automático para el enrutamiento existente.
+- Comparar IA consulta hasta cuatro proveedores de texto configurados y presenta sus respuestas de forma independiente.
+- Equipo IA añade una síntesis de las contribuciones, preferentemente con OpenAI. Si un proveedor falla, se conservan las respuestas restantes. Se requieren al menos dos proveedores disponibles. Cada ejecución puede generar hasta cinco llamadas sin reintentos; los modos de equipo no guardan el contenido en historial ni incluyen memoria anterior. No envíes datos sensibles sin autorización de todos los proveedores.
+- DeepSeek: configura DEEPSEEK_API_KEY y, opcionalmente, DEEPSEEK_TEXT_MODEL (por defecto deepseek-flash). No se habilitan herramientas ni generación de archivos estructurados con este adaptador.
+- Dictar y Leer respuesta usan las APIs de voz del navegador cuando están disponibles; el navegador puede procesar el audio mediante sus servicios. Se requiere permiso de micrófono y HTTPS en producción.
+- Google Assistant/App Actions requieren una aplicación Android nativa instalada y configurada; no están habilitadas por esta interfaz web. Las conexiones OAuth de Gmail, Calendar, Drive y GitHub son integraciones independientes todavía pendientes.
+- Las claves de API y APP_AUTH_PASSWORD deben permanecer en variables privadas del servidor. No compartas las credenciales en GitHub ni en el navegador.
+
+## Compatibilidad de dispositivos e instalación
+
+La interfaz web funciona sin instalación en navegadores modernos. El manifiesto PWA permite instalación o accesos directos según plataforma: Android, iOS/iPadOS, Windows, macOS, ChromeOS y Linux. No requiere una tienda de aplicaciones. En televisores y dispositivos antiguos el acceso depende de su navegador y soporte de JavaScript/HTTPS. Si no hay micrófono compatible, utiliza texto o dictado del teclado del sistema. La IA necesita Internet y acceso autorizado. El service worker no guarda archivos privados, respuestas ni credenciales: únicamente muestra una página de desconexión al abrir la aplicación sin red. No se certifica compatibilidad con todos los dispositivos sin pruebas físicas.
+
+## Asistente universal (modo principal)
+
+La página inicia en Asistente universal. Envía una pregunta a los proveedores de texto configurados y saludables (hasta seis por defecto, doce como límite absoluto), en paralelo, y solicita una síntesis. El navegador recibe una sola respuesta y metadatos de participación, no las respuestas individuales. Si la síntesis falla se muestra una respuesta individual claramente etiquetada; si no responde nadie, se devuelve un error. No se afirma que un acuerdo entre modelos sea una verificación externa. Hasta ocho llamadas por solicitud con seis proveedores y dos intentos de coordinación; el límite configurable de doce permite hasta catorce. Sin reintentos por llamada en este modo. Los modos anteriores de creación, equipo y comparación siguen disponibles.
+
+La memoria de conversación es opcional, en RAM del navegador, limitada a ocho mensajes, y se comparte con los modelos solo cuando el usuario activa la casilla. No se escribe el contenido en el historial del servidor; solo se registra metadato de la operación. Nueva conversación borra ese contexto. No equivale a memoria persistente entre dispositivos.
+
+Acceso autorizado abre una navegación protegida por la autenticación Basic existente; las credenciales se configuran en el servidor. Utiliza HTTPS, no compartas la contraseña de administrador y no habilites generación pública sin cuentas y cuotas individuales.
