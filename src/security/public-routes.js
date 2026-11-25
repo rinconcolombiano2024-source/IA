@@ -9,7 +9,10 @@ const publicAssets = new Set([
   "/styles.css",
   "/favicon.ico",
   "/robots.txt",
-  "/manifest.webmanifest"
+  "/manifest.webmanifest",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/sw.js"
 ]);
 
 function isPublicRequest(method, pathname) {

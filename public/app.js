@@ -37,7 +37,11 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const prompt = promptInput.value.trim();
-  if (!prompt) return;
+  if (!prompt || sendButton.disabled) return;
+  if (navigator.onLine === false) {
+    addMessage("ai", "Sin conexión. Tu petición sigue en el cuadro de texto.");
+    return;
+  }
 
   addMessage("user", prompt);
   promptInput.value = "";
@@ -56,6 +60,7 @@ form.addEventListener("submit", async (event) => {
     loadingMessage.remove();
 
     if (!response.ok) {
+      if (!promptInput.value.trim()) promptInput.value = prompt;
       if (response.status === 401 || response.status === 503 && data.code === "AUTH_NOT_CONFIGURED") {
         addMessage("ai", "IA está abierta al público, pero el uso de modelos todavía requiere una cuenta autorizada.", "El registro individual se habilitará antes del lanzamiento público de las funciones de pago.");
         return;
@@ -67,7 +72,8 @@ form.addEventListener("submit", async (event) => {
     renderResult(data, prompt);
   } catch (error) {
     loadingMessage.remove();
-    addMessage("ai", "No pude conectar con el servidor.", "Revisa que la app este encendida con start.ps1.");
+    if (!promptInput.value.trim()) promptInput.value = prompt;
+    addMessage("ai", "No pude conectar con el servidor.", "Comprueba Internet o la disponibilidad del servicio. No se reenviará automáticamente.");
   } finally {
     setLoading(false);
   }
@@ -86,8 +92,8 @@ async function checkHealth() {
       : "Sistema disponible";
   } catch {
     healthDot.classList.add("is-warn");
-    healthText.textContent = "Servidor apagado";
-    modelText.textContent = "Ejecuta start.ps1";
+    healthText.textContent = "Servicio no disponible";
+    modelText.textContent = "Comprueba tu conexión a Internet";
   }
 }
 
@@ -319,4 +325,37 @@ if ("speechSynthesis" in window && speakButton) {
     utterance.lang = document.documentElement.lang || "es";
     window.speechSynthesis.speak(utterance);
   });
+}
+
+const installButton = document.querySelector("#installButton");
+const installHint = document.querySelector("#installHint");
+let installPrompt = null;
+window.addEventListener("beforeinstallprompt", event => {
+  event.preventDefault();
+  installPrompt = event;
+});
+window.addEventListener("appinstalled", () => {
+  installPrompt = null;
+  installButton.hidden = true;
+});
+function installedMode() {
+  return (typeof window.matchMedia === "function" && window.matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
+}
+if (installedMode()) installButton.hidden = true;
+installButton.addEventListener("click", async () => {
+  if (installPrompt) {
+    const pending = installPrompt;
+    installPrompt = null;
+    try { await pending.prompt(); return; } catch { /* Show manual help. */ }
+  }
+  installHint.hidden = false;
+  installHint.textContent = "iPhone/iPad: Compartir > Añadir a pantalla de inicio. Android: menú del navegador > Instalar o Añadir a pantalla de inicio. Ordenador: menú del navegador > Instalar aplicación (si está disponible). También puedes guardar un marcador.";
+});
+const connectionStatus = document.querySelector("#connectionStatus");
+function updateConnection() { connectionStatus.hidden = navigator.onLine !== false; }
+window.addEventListener("online", () => { updateConnection(); checkHealth(); });
+window.addEventListener("offline", updateConnection);
+updateConnection();
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register("/sw.js").catch(() => { /* Web access remains available. */ });
 }

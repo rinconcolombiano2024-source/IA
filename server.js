@@ -1316,6 +1316,8 @@ function serveFile(pathname, res) {
 
       if (isGenerated) {
         Object.assign(headers, generatedArtifactHeaders(filePath));
+      } else if (relativePath === "sw.js" || relativePath === "manifest.webmanifest" || relativePath === "index.html") {
+        headers["Cache-Control"] = "no-cache";
       }
 
       res.writeHead(200, headers);
@@ -1989,6 +1991,7 @@ function mimeForPath(filePath) {
     ".html": "text/html; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
+    ".webmanifest": "application/manifest+json; charset=utf-8",
     ".md": "text/markdown; charset=utf-8",
     ".mp4": "video/mp4",
     ".pdf": "application/pdf",
@@ -2018,7 +2021,9 @@ function applySecurityHeaders(req, res) {
   );
   res.setHeader(
     "Permissions-Policy",
-    "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    req.method === "GET" && ["/", "/index.html"].includes(String(req.url || "").split("?")[0])
+      ? "camera=(), microphone=(self), geolocation=(), payment=(), usb=()"
+      : "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
   );
 
   const forwardedProto = String(req.headers["x-forwarded-proto"] || "")

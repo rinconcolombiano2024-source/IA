@@ -111,3 +111,7 @@ Si tu cuenta no tiene acceso a algun modelo, cambia el valor por un modelo dispo
 - Dictar y Leer respuesta usan las APIs de voz del navegador cuando están disponibles; el navegador puede procesar el audio mediante sus servicios. Se requiere permiso de micrófono y HTTPS en producción.
 - Google Assistant/App Actions requieren una aplicación Android nativa instalada y configurada; no están habilitadas por esta interfaz web. Las conexiones OAuth de Gmail, Calendar, Drive y GitHub son integraciones independientes todavía pendientes.
 - Las claves de API y APP_AUTH_PASSWORD deben permanecer en variables privadas del servidor. No compartas las credenciales en GitHub ni en el navegador.
+
+## Compatibilidad de dispositivos e instalación
+
+La interfaz web funciona sin instalación en navegadores modernos. El manifiesto PWA permite instalación o accesos directos según plataforma: Android, iOS/iPadOS, Windows, macOS, ChromeOS y Linux. No requiere una tienda de aplicaciones. En televisores y dispositivos antiguos el acceso depende de su navegador y soporte de JavaScript/HTTPS. Si no hay micrófono compatible, utiliza texto o dictado del teclado del sistema. La IA necesita Internet y acceso autorizado. El service worker no guarda archivos privados, respuestas ni credenciales: únicamente muestra una página de desconexión al abrir la aplicación sin red. No se certifica compatibilidad con todos los dispositivos sin pruebas físicas.

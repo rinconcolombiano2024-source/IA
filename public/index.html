@@ -2,8 +2,13 @@
 <html lang="es">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Mi IA Max</title>
+    <meta name="theme-color" content="#111827" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="icon" href="/icon-192.png" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
@@ -12,6 +17,8 @@
         <div class="brand">
           <p class="eyebrow">Mi IA Max</p>
           <h1>Centro creativo de IA</h1>
+          <button id="installButton" class="mode" type="button">Instalar / acceso directo</button>
+          <p id="installHint" role="status" hidden></p>
         </div>
 
         <section class="status" aria-label="Estado del sistema">
@@ -84,6 +91,8 @@
           </select>
         </header>
 
+        <noscript>Esta aplicación necesita JavaScript. Actívalo o utiliza un navegador actualizado.</noscript>
+        <p id="connectionStatus" role="status" hidden>Sin conexión. Conéctate a Internet para usar la IA.</p>
         <div id="messages" class="messages">
           <article class="message ai">
             <div class="avatar">AI</div>
@@ -104,9 +113,11 @@
             placeholder="Ejemplo: Crea un menu de restaurante en PDF o programa una pagina web para mi negocio..."
             required
           ></textarea>
-          <button id="dictateButton" type="button" hidden>Dictar</button>
-          <button id="speakButton" type="button" hidden>Leer respuesta</button>
-          <button id="sendButton" type="submit">Crear</button>
+          <div class="composer-actions">
+            <button id="dictateButton" type="button" hidden>Dictar</button>
+            <button id="speakButton" type="button" hidden>Leer respuesta</button>
+            <button id="sendButton" type="submit">Crear</button>
+          </div>
         </form>
       </section>
     </main>
