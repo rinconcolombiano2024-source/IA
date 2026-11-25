@@ -27,6 +27,8 @@
           <div class="mode-grid">
             <button class="mode is-active" data-mode="auto" type="button">Auto</button>
             <button class="mode" data-mode="text" type="button">Texto</button>
+            <button class="mode" data-mode="team" type="button">Equipo IA</button>
+            <button class="mode" data-mode="compare" type="button">Comparar IA</button>
             <button class="mode" data-mode="document" type="button">Documento</button>
             <button class="mode" data-mode="restaurant" type="button">Menu</button>
             <button class="mode" data-mode="book" type="button">Libro</button>
@@ -38,6 +40,16 @@
           </div>
         </section>
 
+        <section aria-label="Proveedor de IA">
+          <h2>Proveedor</h2>
+          <select id="providerSelect" aria-label="Proveedor de IA">
+            <option value="">Automático</option>
+            <option value="openai">OpenAI</option><option value="gemini">Gemini</option>
+            <option value="anthropic">Claude</option><option value="deepseek">DeepSeek</option>
+            <option value="xai">Grok</option><option value="groq">Groq</option>
+          </select>
+          <small>Los modos de equipo envían tu petición a varios proveedores y pueden aumentar el coste.</small>
+        </section>
         <section aria-label="Ejemplos">
           <h2>Pedidos rapidos</h2>
           <div class="examples">
@@ -92,6 +104,8 @@
             placeholder="Ejemplo: Crea un menu de restaurante en PDF o programa una pagina web para mi negocio..."
             required
           ></textarea>
+          <button id="dictateButton" type="button" hidden>Dictar</button>
+          <button id="speakButton" type="button" hidden>Leer respuesta</button>
           <button id="sendButton" type="submit">Crear</button>
         </form>
       </section>

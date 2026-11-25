@@ -10,12 +10,17 @@ const healthText = document.querySelector("#healthText");
 const modelText = document.querySelector("#modelText");
 
 let mode = "auto";
+const providerSelect = document.querySelector("#providerSelect");
+let lastAnswer = "";
+const dictateButton = document.querySelector("#dictateButton");
+const speakButton = document.querySelector("#speakButton");
 
 checkHealth();
 
 modeButtons.forEach((button) => {
   button.addEventListener("click", () => {
     mode = button.dataset.mode;
+    providerSelect.disabled = mode === "team" || mode === "compare";
     modeButtons.forEach((item) => item.classList.toggle("is-active", item === button));
     promptInput.focus();
   });
@@ -44,7 +49,7 @@ form.addEventListener("submit", async (event) => {
     const response = await fetch("/api/run", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify({ prompt, mode, format: formatSelect.value })
+      body: JSON.stringify({ prompt, mode, format: formatSelect.value, provider: providerSelect.disabled ? "" : providerSelect.value })
     });
 
     const data = await response.json();
@@ -97,7 +102,14 @@ function renderResult(data, prompt) {
     return;
   }
 
-  addMessage("ai", data.text || "Listo.", data.title);
+  lastAnswer = data.text || "";
+  addMessage("ai", data.text || "Listo.", data.synthesis ? data.title + " · " + data.synthesis.provider : data.title);
+  if (Array.isArray(data.contributions)) {
+    for (const entry of data.contributions) {
+      addMessage("ai", entry.status === "ok" ? entry.text : "Proveedor no disponible para esta solicitud.", entry.provider + " · " + entry.model);
+    }
+    if (data.partial) addMessage("ai", "Resultado parcial: no todos los modelos o la síntesis respondieron.");
+  }
   if (Array.isArray(data.files) && data.files.length) {
     addFilesMessage(data.title || "Archivos creados", data.files);
   }
@@ -278,4 +290,33 @@ function formatBytes(bytes = 0) {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (Recognition && dictateButton) {
+  dictateButton.hidden = false;
+  dictateButton.addEventListener("click", () => {
+    const recognition = new Recognition();
+    recognition.lang = document.documentElement.lang || "es";
+    recognition.interimResults = false;
+    recognition.onresult = event => {
+      const words = event.results[0][0].transcript;
+      promptInput.value = [promptInput.value, words].filter(Boolean).join(" ");
+      promptInput.focus();
+    };
+    recognition.onerror = () => addMessage("ai", "No se pudo utilizar el micrófono. Comprueba los permisos.");
+    recognition.onend = () => { dictateButton.disabled = false; };
+    try { recognition.start(); dictateButton.disabled = true; }
+    catch { dictateButton.disabled = false; }
+  });
+}
+if ("speechSynthesis" in window && speakButton) {
+  speakButton.hidden = false;
+  speakButton.addEventListener("click", () => {
+    if (!lastAnswer) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(lastAnswer.slice(0, 12000));
+    utterance.lang = document.documentElement.lang || "es";
+    window.speechSynthesis.speak(utterance);
+  });
 }

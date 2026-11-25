@@ -101,3 +101,13 @@ Si tu cuenta no tiene acceso a algun modelo, cambia el valor por un modelo dispo
 - `generated/`: trabajos creados por la IA.
 - `data/history.json`: historial local de trabajos.
 - `data/errors.log`: errores registrados para diagnostico.
+
+## Equipo de IA y voz
+
+- Selecciona un proveedor o conserva Automático para el enrutamiento existente.
+- Comparar IA consulta hasta cuatro proveedores de texto configurados y presenta sus respuestas de forma independiente.
+- Equipo IA añade una síntesis de las contribuciones, preferentemente con OpenAI. Si un proveedor falla, se conservan las respuestas restantes. Se requieren al menos dos proveedores disponibles. Cada ejecución puede generar hasta cinco llamadas sin reintentos; los modos de equipo no guardan el contenido en historial ni incluyen memoria anterior. No envíes datos sensibles sin autorización de todos los proveedores.
+- DeepSeek: configura DEEPSEEK_API_KEY y, opcionalmente, DEEPSEEK_TEXT_MODEL (por defecto deepseek-flash). No se habilitan herramientas ni generación de archivos estructurados con este adaptador.
+- Dictar y Leer respuesta usan las APIs de voz del navegador cuando están disponibles; el navegador puede procesar el audio mediante sus servicios. Se requiere permiso de micrófono y HTTPS en producción.
+- Google Assistant/App Actions requieren una aplicación Android nativa instalada y configurada; no están habilitadas por esta interfaz web. Las conexiones OAuth de Gmail, Calendar, Drive y GitHub son integraciones independientes todavía pendientes.
+- Las claves de API y APP_AUTH_PASSWORD deben permanecer en variables privadas del servidor. No compartas las credenciales en GitHub ni en el navegador.

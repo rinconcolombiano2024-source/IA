@@ -17,6 +17,8 @@ const { createAnthropicProvider } = require("./src/providers/anthropic/provider"
 const { createGeminiProvider } = require("./src/providers/gemini/provider");
 const { createXaiProvider } = require("./src/providers/xai/provider");
 const { createGroqProvider } = require("./src/providers/groq/provider");
+const { createDeepSeekProvider } = require("./src/providers/deepseek/provider");
+const { orchestrate } = require("./src/core/team-orchestrator");
 const { createModelRegistry } = require("./src/models/model-registry");
 const { createModelDiscovery } = require("./src/models/model-discovery");
 const { createModelRouter, capabilityForIntent } = require("./src/core/model-router");
@@ -51,12 +53,14 @@ const anthropicProvider = createAnthropicProvider({ env });
 const geminiProvider = createGeminiProvider({ env });
 const xaiProvider = createXaiProvider({ env });
 const groqProvider = createGroqProvider({ env });
+const deepSeekProvider = createDeepSeekProvider({ env });
 const providerRegistry = createProviderRegistry([
   openAiProvider,
   anthropicProvider,
   geminiProvider,
   xaiProvider,
-  groqProvider
+  groqProvider,
+  deepSeekProvider
 ]);
 const modelRegistry = createModelRegistry({ providerRegistry });
 const modelDiscovery = createModelDiscovery({
@@ -326,6 +330,37 @@ async function handleRun(req, res, requestId, deadline) {
       code: promptValidation.code,
       requestId,
       maxPromptChars: promptValidation.maxPromptChars
+    });
+    return;
+  }
+
+  if (requestedMode === "team" || requestedMode === "compare") {
+    const selections = [];
+    for (const provider of providerRegistry.findByCapability("text")) {
+      if (!providerHealth.canRoute(provider.id)) continue;
+      try { selections.push(modelRouter.plan({ capability: "text", preferredProvider: provider.id }).primary); } catch { /* unavailable */ }
+    }
+    const outcome = await orchestrate({
+      mode: requestedMode, prompt, selections,
+      generate: async (selection, instructions, input) => {
+        const provider = modelRouter.providerFor(selection);
+        return runTrackedProviderTask(provider, async () => {
+          const data = await createTextResponse(provider, { model: selection.id, purpose: "general", instructions, input }, deadline, 0);
+          const answer = provider.extractText(data);
+          if (!answer) throw Error("Empty model response");
+          return answer;
+        });
+      }
+    });
+    if (outcome.unavailable) {
+      sendJson(res, 400, { error: "Configura al menos dos proveedores de texto disponibles para trabajar en equipo.", code: "TEAM_UNAVAILABLE" });
+      return;
+    }
+    const count = outcome.contributions.filter(c => c.status === "ok").length;
+    sendJson(res, count ? 200 : 503, {
+      type: "text", title: requestedMode === "team" ? "Equipo IA" : "Comparación IA",
+      text: outcome.synthesis?.text || (count ? "Respuestas independientes disponibles abajo." : "Ningún proveedor respondió correctamente."),
+      ...outcome, files: []
     });
     return;
   }
@@ -1147,6 +1182,7 @@ function getHealth() {
     geminiConfigured: geminiProvider.isConfigured(),
     xaiConfigured: xaiProvider.isConfigured(),
     groqConfigured: groqProvider.isConfigured(),
+    deepSeekConfigured: deepSeekProvider.isConfigured(),
     activeProvider: primaryTextProvider?.id || null,
     providers: providerRegistry.listPublic(),
     providerHealth: providerHealth.summary(
